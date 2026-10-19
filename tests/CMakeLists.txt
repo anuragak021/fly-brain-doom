@@ -23,9 +23,18 @@ add_executable(test_brain_protocol
 target_include_directories(test_brain_protocol PRIVATE ${FW}/include)
 target_link_libraries(test_brain_protocol PRIVATE m)
 
+add_executable(test_plasticity
+    c/test_plasticity.c
+    ${FW}/src/plasticity.c
+    ${FW}/src/rate_model.c
+    ${FW}/generated/model_weights.c)
+target_include_directories(test_plasticity PRIVATE ${FW}/src ${FW}/include ${FW}/generated)
+target_link_libraries(test_plasticity PRIVATE m)
+
 add_executable(test_brain_server
     c/test_brain_server.c
     ${FW}/src/brain_server.c
+    ${FW}/src/plasticity.c
     ${FW}/src/brain_protocol.c
     ${FW}/src/rate_model.c
     ${FW}/generated/model_weights.c)
@@ -36,6 +45,7 @@ add_executable(test_brain_link
     c/test_brain_link.c
     ${FW}/src/brain_link.c
     ${FW}/src/brain_server.c
+    ${FW}/src/plasticity.c
     ${FW}/src/brain_protocol.c
     ${FW}/src/rate_model.c
     ${FW}/generated/model_weights.c)
@@ -45,6 +55,8 @@ target_link_libraries(test_brain_link PRIVATE m)
 enable_testing()
 add_test(NAME rate_model_vs_python
          COMMAND test_rate_model ${CMAKE_CURRENT_SOURCE_DIR}/golden/rate_golden.csv)
+add_test(NAME plasticity_vs_python
+         COMMAND test_plasticity ${CMAKE_CURRENT_SOURCE_DIR}/golden/learn_golden.csv)
 add_test(NAME brain_protocol_vectors
          COMMAND test_brain_protocol ${CMAKE_CURRENT_SOURCE_DIR}/golden/protocol_vectors.txt)
 add_test(NAME brain_server COMMAND test_brain_server)

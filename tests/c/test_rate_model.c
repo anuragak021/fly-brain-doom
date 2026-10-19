@@ -13,7 +13,7 @@
 #include "rate_model.h"
 
 #define LINE_BYTES 256U
-#define GOLDEN_COLUMNS 10
+#define GOLDEN_COLUMNS 12
 #define ABS_TOL 1.0e-5F
 #define REL_TOL 1.0e-4F
 
@@ -36,18 +36,20 @@ static void test_api_errors(void)
 {
     static rm_state_t st;
     static float drive[MODEL_N_NEURONS];
-    const float feat[RM_N_FEATURES] = {0.0F, 0.0F, 0.0F, 0.0F};
-    const float bad[RM_N_FEATURES] = {0.0F, NAN, 0.0F, 0.0F};
+    const float feat[RM_N_FEATURES] = {0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F};
+    const float bad[RM_N_FEATURES] = {0.0F, 0.0F, 0.0F, 0.0F, 0.0F, NAN};
     rm_outputs_t out;
 
     CHECK(rm_reset(NULL) == RM_ERR_NULL);
     CHECK(rm_make_drive(NULL, drive) == RM_ERR_NULL);
     CHECK(rm_make_drive(feat, NULL) == RM_ERR_NULL);
     CHECK(rm_make_drive(bad, drive) == RM_ERR_RANGE);
-    CHECK(rm_step(NULL, drive, 1U) == RM_ERR_NULL);
+    CHECK(rm_step(NULL, model_values, drive, 1U) == RM_ERR_NULL);
     CHECK(rm_reset(&st) == RM_OK);
-    CHECK(rm_step(&st, drive, 0U) == RM_ERR_RANGE);
-    CHECK(rm_step(&st, drive, RM_MAX_SUBSTEPS + 1U) == RM_ERR_RANGE);
+    CHECK(rm_step(&st, NULL, drive, 1U) == RM_ERR_NULL);
+    CHECK(rm_step(&st, model_values, NULL, 1U) == RM_ERR_NULL);
+    CHECK(rm_step(&st, model_values, drive, 0U) == RM_ERR_RANGE);
+    CHECK(rm_step(&st, model_values, drive, RM_MAX_SUBSTEPS + 1U) == RM_ERR_RANGE);
     CHECK(rm_outputs(NULL, &out) == RM_ERR_NULL);
     CHECK(rm_outputs(&st, NULL) == RM_ERR_NULL);
 }
@@ -59,7 +61,7 @@ static void test_zero_state_stays_zero_without_drive(void)
     rm_outputs_t out;
 
     CHECK(rm_reset(&st) == RM_OK);
-    CHECK(rm_step(&st, drive, MODEL_SUBSTEPS_PER_FRAME) == RM_OK);
+    CHECK(rm_step(&st, model_values, drive, MODEL_SUBSTEPS_PER_FRAME) == RM_OK);
     CHECK(rm_outputs(&st, &out) == RM_OK);
     CHECK(out.steer_left == 0.0F);
     CHECK(out.forward == 0.0F);
@@ -84,21 +86,21 @@ static void test_golden(const char *path)
         bool turn_left;
         bool turn_right;
         rm_outputs_t out;
-        const int n = sscanf(line, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3],
-                             &v[4], &v[5], &v[6], &v[7], &v[8], &v[9]);
+        const int n = sscanf(line, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2],
+                             &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9], &v[10], &v[11]);
         CHECK(n == GOLDEN_COLUMNS);
         CHECK(rm_make_drive(v, drive) == RM_OK);
-        CHECK(rm_step(&st, drive, MODEL_SUBSTEPS_PER_FRAME) == RM_OK);
+        CHECK(rm_step(&st, model_values, drive, MODEL_SUBSTEPS_PER_FRAME) == RM_OK);
         CHECK(rm_outputs(&st, &out) == RM_OK);
         CHECK(rm_decode_turn(&out, &turn_left, &turn_right) == RM_OK);
-        CHECK(turn_left == (v[8] > 0.5F));
-        CHECK(turn_right == (v[9] > 0.5F));
-        if (!close_enough(out.steer_left, v[4]) || !close_enough(out.steer_right, v[5]) ||
-            !close_enough(out.forward, v[6]) || !close_enough(out.backward, v[7])) {
+        CHECK(turn_left == (v[10] > 0.5F));
+        CHECK(turn_right == (v[11] > 0.5F));
+        if (!close_enough(out.steer_left, v[6]) || !close_enough(out.steer_right, v[7]) ||
+            !close_enough(out.forward, v[8]) || !close_enough(out.backward, v[9])) {
             (void)printf("frame %u mismatch: C %.7g %.7g %.7g %.7g vs Python %.7g %.7g %.7g %.7g\n",
                          (unsigned)frame, (double)out.steer_left, (double)out.steer_right,
-                         (double)out.forward, (double)out.backward, (double)v[4], (double)v[5],
-                         (double)v[6], (double)v[7]);
+                         (double)out.forward, (double)out.backward, (double)v[6], (double)v[7],
+                         (double)v[8], (double)v[9]);
             g_failures++;
         }
         frame++;

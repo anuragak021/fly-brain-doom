@@ -3,12 +3,14 @@
 Pure numpy / plain data, no ViZDoom import, so it is unit testable on the host.
 
 Feature vector (float32, all in 0..1), order fixed by the FEATURE_* indices:
-    [luminance_left, luminance_right, enemy_left, enemy_right]
+    [luminance_left, luminance_right, enemy_left, enemy_right, damage_left, damage_right]
 
 Simplifications (listed in NOTES.md):
   * luminance is the mean of the grey screen buffer, left half vs right half;
   * the enemy position comes from ViZDoom's labels buffer (game-engine ground
-    truth, NOT a vision pipeline); the largest visible monster is used.
+    truth, NOT a vision pipeline); the largest visible monster is used;
+  * damage_left / damage_right (which side the last attacker is on, fading as the pain wears
+    off) are computed only by the ESP32 Doom port; ViZDoom frames leave them at 0.
 """
 
 from __future__ import annotations
@@ -22,7 +24,9 @@ FEATURE_LUM_L = 0
 FEATURE_LUM_R = 1
 FEATURE_ENEMY_L = 2
 FEATURE_ENEMY_R = 3
-N_FEATURES = 4
+FEATURE_DAMAGE_L = 4
+FEATURE_DAMAGE_R = 5
+N_FEATURES = 6
 GRAY_MAX = 255.0
 
 # Labels that count as enemies (ViZDoom object names); everything else is ignored.

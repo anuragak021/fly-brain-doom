@@ -1,4 +1,4 @@
-"""Python reference implementation of the brain UART protocol v1.
+"""Python reference implementation of the brain UART protocol v2.
 
 The normative definition is ``firmware/include/brain_protocol.h`` (and the README section
 "Brain protocol"). This module mirrors it byte for byte and is used by the laptop
@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 SOF = 0xA5
 HEADER_BYTES = 5
 CRC_BYTES = 4
@@ -37,12 +37,18 @@ ERR_BAD_LENGTH = 2
 ERR_BAD_VERSION = 3
 ERR_BAD_FEATURE = 4
 
-N_FEATURES = 4
-STEP_PAYLOAD_BYTES = 2 * N_FEATURES
-STEP_RESP_PAYLOAD_BYTES = 22
-INFO_PAYLOAD_BYTES = 9
+N_FEATURES = 6
+STEP_OFF_REWARD = 2 * N_FEATURES
+STEP_OFF_FLAGS = STEP_OFF_REWARD + 2
+STEP_PAYLOAD_BYTES = STEP_OFF_FLAGS + 1
+STEP_RESP_PAYLOAD_BYTES = 26
+INFO_PAYLOAD_BYTES = 11
 ERROR_PAYLOAD_BYTES = 2
 Q15_MAX = 32767
+
+STEP_FLAG_LEARN = 1 << 0
+STEP_FLAG_RESET_WEIGHTS = 1 << 1
+STEP_FLAG_RESERVED_MASK = 0xFC
 
 ACTION_TURN_LEFT = 1 << 0
 ACTION_TURN_RIGHT = 1 << 1
@@ -152,21 +158,68 @@ def quantize_features(features: np.ndarray) -> np.ndarray:
     )
 
 
-def encode_step_request(features: np.ndarray) -> bytes:
-    """STEP request payload: 4 x i16 LE Q15."""
+def reward_to_q15(value: float) -> int:
+    """float32 round-half-away of clamp(r, -1, 1) * 32767 (NaN -> 0), like the C helper."""
+    r = _F32(value)
+    if np.isnan(r):
+        return 0
+    if r >= 1:
+        return Q15_MAX
+    if r <= -1:
+        return -Q15_MAX
+    if r >= 0:
+        return int(r * _F32(Q15_MAX) + _F32(0.5))
+    return -int(-r * _F32(Q15_MAX) + _F32(0.5))
+
+
+def reward_from_q15(q15: int) -> np.float32:
+    """Q15 signed -> float32 reward (q / 32767)."""
+    return _F32(q15) / _F32(Q15_MAX)
+
+
+_STEP_FMT = f"<{N_FEATURES}hhB"
+
+
+@dataclass(frozen=True)
+class StepRequest:
+    """Decoded STEP request."""
+
+    features: np.ndarray
+    reward: float = 0.0
+    flags: int = 0
+
+
+def encode_step_request(
+    features: np.ndarray, reward: float = 0.0, flags: int = 0
+) -> bytes:
+    """STEP request payload: 6 x i16 LE Q15 features, i16 LE Q15 reward, u8 flags."""
     if len(features) != N_FEATURES:
         raise ProtocolError(f"expected {N_FEATURES} features, got {len(features)}")
-    return struct.pack("<4h", *(feature_to_q15(float(v)) for v in features))
+    if not 0 <= flags <= 0xFF or flags & STEP_FLAG_RESERVED_MASK:
+        raise ProtocolError(f"bad STEP flags 0x{flags:02x}")
+    return struct.pack(
+        _STEP_FMT,
+        *(feature_to_q15(float(v)) for v in features),
+        reward_to_q15(reward),
+        flags,
+    )
 
 
-def decode_step_request(payload: bytes) -> np.ndarray:
-    """Inverse of encode_step_request; raises ProtocolError on bad length or negative Q15."""
+def decode_step_request(payload: bytes) -> StepRequest:
+    """Inverse of encode_step_request; raises ProtocolError on bad length, a negative
+    feature or a reward of -32768. Reserved flag bits are ignored (masked off)."""
     if len(payload) != STEP_PAYLOAD_BYTES:
         raise ProtocolError("bad STEP payload length")
-    values = struct.unpack("<4h", payload)
+    *values, reward, flags = struct.unpack(_STEP_FMT, payload)
     if any(v < 0 for v in values):
         raise ProtocolError("negative feature")
-    return np.array([feature_from_q15(v) for v in values], dtype=np.float32)
+    if reward < -Q15_MAX:
+        raise ProtocolError("reward -32768")
+    return StepRequest(
+        np.array([feature_from_q15(v) for v in values], dtype=np.float32),
+        float(reward_from_q15(reward)),
+        flags & ~STEP_FLAG_RESERVED_MASK & 0xFF,
+    )
 
 
 @dataclass(frozen=True)
@@ -179,12 +232,13 @@ class StepResponse:
     steer_right: float
     forward: float
     backward: float
+    weight_drift: float = 0.0
 
 
 def encode_step_response(resp: StepResponse) -> bytes:
-    """STEP response payload (22 bytes)."""
+    """STEP response payload (26 bytes)."""
     return struct.pack(
-        "<BBI4f",
+        "<BBI5f",
         resp.actions,
         0,
         resp.step_cycles,
@@ -192,6 +246,7 @@ def encode_step_response(resp: StepResponse) -> bytes:
         resp.steer_right,
         resp.forward,
         resp.backward,
+        resp.weight_drift,
     )
 
 
@@ -199,14 +254,24 @@ def decode_step_response(payload: bytes) -> StepResponse:
     """Decode a STEP response payload."""
     if len(payload) != STEP_RESP_PAYLOAD_BYTES:
         raise ProtocolError("bad STEP response length")
-    actions, _reserved, cycles, sl, sr, fwd, back = struct.unpack("<BBI4f", payload)
-    return StepResponse(actions, cycles, sl, sr, fwd, back)
+    actions, _reserved, cycles, sl, sr, fwd, back, drift = struct.unpack(
+        "<BBI5f", payload
+    )
+    return StepResponse(actions, cycles, sl, sr, fwd, back, drift)
 
 
-def encode_info(n_neurons: int, substeps: int, core_clock_khz: int) -> bytes:
-    """INFO response payload (9 bytes)."""
+def encode_info(
+    n_neurons: int, substeps: int, core_clock_khz: int, n_learnable: int = 0
+) -> bytes:
+    """INFO response payload (11 bytes)."""
     return struct.pack(
-        "<BBHBI", PROTOCOL_VERSION, N_FEATURES, n_neurons, substeps, core_clock_khz
+        "<BBHBIH",
+        PROTOCOL_VERSION,
+        N_FEATURES,
+        n_neurons,
+        substeps,
+        core_clock_khz,
+        n_learnable,
     )
 
 

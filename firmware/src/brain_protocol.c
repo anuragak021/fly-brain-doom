@@ -1,6 +1,6 @@
 /**
  * @file brain_protocol.c
- * @brief Brain UART protocol v1 helpers (pure logic, no HAL). See brain_protocol.h.
+ * @brief Brain UART protocol v2 helpers (pure logic, no HAL). See brain_protocol.h.
  */
 #include "brain_protocol.h"
 
@@ -19,11 +19,16 @@
 #define SHIFT_24 24U
 #define FRAME_CRC_START 1U /* CRC covers VERSION .. PAYLOAD */
 
-_Static_assert(BRAIN_STEP_PAYLOAD_BYTES == (2U * BRAIN_N_FEATURES),
-               "STEP payload is 2 bytes per feature");
-_Static_assert(BRAIN_STEP_RESP_PAYLOAD_BYTES == (BRAIN_RESP_OFF_BACKWARD + 4U),
+_Static_assert(BRAIN_STEP_OFF_REWARD == (2U * BRAIN_N_FEATURES), "features come first");
+_Static_assert(BRAIN_STEP_OFF_FLAGS == (BRAIN_STEP_OFF_REWARD + 2U), "flags follow the reward");
+_Static_assert(BRAIN_STEP_PAYLOAD_BYTES == (BRAIN_STEP_OFF_FLAGS + 1U), "STEP request layout");
+_Static_assert(BRAIN_STEP_RESP_PAYLOAD_BYTES == (BRAIN_RESP_OFF_WEIGHT_DRIFT + 4U),
                "STEP response layout");
-_Static_assert(BRAIN_INFO_PAYLOAD_BYTES == (BRAIN_INFO_OFF_CORE_CLOCK_KHZ + 4U), "INFO layout");
+_Static_assert(BRAIN_RESP_OFF_WEIGHT_DRIFT == (BRAIN_RESP_OFF_BACKWARD + 4U), "drift follows");
+_Static_assert(BRAIN_INFO_PAYLOAD_BYTES == (BRAIN_INFO_OFF_N_LEARNABLE + 2U), "INFO layout");
+_Static_assert(BRAIN_INFO_OFF_N_LEARNABLE == (BRAIN_INFO_OFF_CORE_CLOCK_KHZ + 4U), "INFO order");
+_Static_assert(BRAIN_STEP_PAYLOAD_BYTES <= BRAIN_MAX_PAYLOAD_BYTES, "STEP fits a frame");
+_Static_assert(BRAIN_STEP_RESP_PAYLOAD_BYTES <= BRAIN_MAX_PAYLOAD_BYTES, "response fits");
 _Static_assert(BRAIN_MAX_FRAME_BYTES <= 255U, "parser count is uint8_t");
 
 typedef enum { CHECK_MORE, CHECK_GOOD, CHECK_BAD } check_t;
@@ -224,9 +229,32 @@ float brain_feature_from_q15(int16_t q15)
     return (float)q15 / Q15_MAX_F;
 }
 
-brain_status_t brain_step_request_decode(const uint8_t *payload, size_t len, float *features)
+int16_t brain_reward_to_q15(float reward)
 {
-    if ((payload == NULL) || (features == NULL)) {
+    if (!(reward == reward)) {
+        return 0; /* NaN */
+    }
+    if (reward >= 1.0F) {
+        return (int16_t)Q15_MAX;
+    }
+    if (reward <= -1.0F) {
+        return (int16_t)(-Q15_MAX);
+    }
+    if (reward >= 0.0F) {
+        return (int16_t)((reward * Q15_MAX_F) + ROUND_HALF);
+    }
+    const int16_t magnitude = (int16_t)((-reward * Q15_MAX_F) + ROUND_HALF);
+    return (int16_t)(-magnitude);
+}
+
+float brain_reward_from_q15(int16_t q15)
+{
+    return (float)q15 / Q15_MAX_F;
+}
+
+brain_status_t brain_step_request_decode(const uint8_t *payload, size_t len, brain_step_req_t *req)
+{
+    if ((payload == NULL) || (req == NULL)) {
         return BRAIN_ERR_NULL;
     }
     if (len != BRAIN_STEP_PAYLOAD_BYTES) {
@@ -237,22 +265,31 @@ brain_status_t brain_step_request_decode(const uint8_t *payload, size_t len, flo
         if (q < 0) {
             return BRAIN_ERR_FEATURE;
         }
-        features[i] = brain_feature_from_q15(q);
+        req->features[i] = brain_feature_from_q15(q);
     }
+    const int16_t reward = get_i16(&payload[BRAIN_STEP_OFF_REWARD]);
+    if (reward < -Q15_MAX) {
+        return BRAIN_ERR_FEATURE;
+    }
+    req->reward = brain_reward_from_q15(reward);
+    /* Reserved bits are ignored, so a later sender can use them without breaking us. */
+    req->flags = (uint8_t)(payload[BRAIN_STEP_OFF_FLAGS] & ~BRAIN_STEP_FLAG_RESERVED_MASK);
     return BRAIN_OK;
 }
 
-brain_status_t brain_step_request_encode(const float *features, uint8_t *payload, size_t cap)
+brain_status_t brain_step_request_encode(const brain_step_req_t *req, uint8_t *payload, size_t cap)
 {
-    if ((features == NULL) || (payload == NULL)) {
+    if ((req == NULL) || (payload == NULL)) {
         return BRAIN_ERR_NULL;
     }
     if (cap < BRAIN_STEP_PAYLOAD_BYTES) {
         return BRAIN_ERR_SIZE;
     }
     for (uint32_t i = 0U; i < BRAIN_N_FEATURES; i++) {
-        put_u16(&payload[(size_t)2U * i], (uint16_t)brain_feature_to_q15(features[i]));
+        put_u16(&payload[(size_t)2U * i], (uint16_t)brain_feature_to_q15(req->features[i]));
     }
+    put_u16(&payload[BRAIN_STEP_OFF_REWARD], (uint16_t)brain_reward_to_q15(req->reward));
+    payload[BRAIN_STEP_OFF_FLAGS] = (uint8_t)(req->flags & ~BRAIN_STEP_FLAG_RESERVED_MASK);
     return BRAIN_OK;
 }
 
@@ -271,6 +308,7 @@ brain_status_t brain_step_resp_encode(const brain_step_resp_t *resp, uint8_t *pa
     put_f32(&payload[BRAIN_RESP_OFF_STEER_RIGHT], resp->steer_right);
     put_f32(&payload[BRAIN_RESP_OFF_FORWARD], resp->forward);
     put_f32(&payload[BRAIN_RESP_OFF_BACKWARD], resp->backward);
+    put_f32(&payload[BRAIN_RESP_OFF_WEIGHT_DRIFT], resp->weight_drift);
     return BRAIN_OK;
 }
 
@@ -288,5 +326,6 @@ brain_status_t brain_step_resp_decode(const uint8_t *payload, size_t len, brain_
     resp->steer_right = get_f32(&payload[BRAIN_RESP_OFF_STEER_RIGHT]);
     resp->forward = get_f32(&payload[BRAIN_RESP_OFF_FORWARD]);
     resp->backward = get_f32(&payload[BRAIN_RESP_OFF_BACKWARD]);
+    resp->weight_drift = get_f32(&payload[BRAIN_RESP_OFF_WEIGHT_DRIFT]);
     return BRAIN_OK;
 }

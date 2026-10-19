@@ -1,7 +1,12 @@
 /**
  * @file brain_protocol.h
- * @brief Brain UART protocol v1: wire format shared by the STM32 brain, the laptop
- *        (`--backend stm32`) and the ESP32-S3 Doom game (doom-esp32).
+ * @brief Brain UART protocol v2: wire format shared by the STM32 brain, the laptop
+ *        (`--backend stm32`) and the ESP32-S3 Doom game (doom-nano/, and doom-esp32).
+ *
+ * v2 (2026-10-20) changes from v1: STEP carries 6 features (adds DAMAGE_LEFT/RIGHT), a
+ * signed reward and a flags byte (learning on, reset learned weights); the STEP response adds
+ * the learned weights' drift; INFO adds the number of learning synapses. A v1 master gets
+ * BRAIN_ERR_BAD_VERSION and must be updated.
  *
  * OWNER: drosophila. Consumers must match this file exactly and never redefine it.
  *
@@ -39,7 +44,7 @@
 
 /* ---- Frame constants -------------------------------------------------------------- */
 
-#define BRAIN_PROTOCOL_VERSION 1U
+#define BRAIN_PROTOCOL_VERSION 2U
 #define BRAIN_SOF 0xA5U
 
 #define BRAIN_OFF_SOF 0U
@@ -77,30 +82,45 @@
 /** PING request and RESET request and RESET response: empty payload (LEN = 0). */
 
 /** INFO response payload (BRAIN_INFO_PAYLOAD_BYTES). */
-#define BRAIN_INFO_PAYLOAD_BYTES 9U
+#define BRAIN_INFO_PAYLOAD_BYTES 11U
 #define BRAIN_INFO_OFF_PROTO_VERSION 0U  /**< u8, equals BRAIN_PROTOCOL_VERSION */
 #define BRAIN_INFO_OFF_N_FEATURES 1U     /**< u8, equals BRAIN_N_FEATURES */
 #define BRAIN_INFO_OFF_N_NEURONS 2U      /**< u16 LE, neurons in the model */
 #define BRAIN_INFO_OFF_SUBSTEPS 4U       /**< u8, Euler substeps per STEP */
 #define BRAIN_INFO_OFF_CORE_CLOCK_KHZ 5U /**< u32 LE, core clock the cycle count is in */
+#define BRAIN_INFO_OFF_N_LEARNABLE 9U    /**< u16 LE, synapses that learn (0 = no learning) */
 
-/** STEP request payload: BRAIN_N_FEATURES x i16 LE, Q15 (BRAIN_STEP_PAYLOAD_BYTES). */
-#define BRAIN_N_FEATURES 4U
-#define BRAIN_STEP_PAYLOAD_BYTES 8U /**< 4 features x 2 bytes */
-#define BRAIN_FEAT_LUM_LEFT 0U      /**< payload bytes 0..1 */
-#define BRAIN_FEAT_LUM_RIGHT 1U     /**< payload bytes 2..3 */
-#define BRAIN_FEAT_ENEMY_LEFT 2U    /**< payload bytes 4..5 */
-#define BRAIN_FEAT_ENEMY_RIGHT 3U   /**< payload bytes 6..7 */
+/** STEP request payload (BRAIN_STEP_PAYLOAD_BYTES):
+ *  BRAIN_N_FEATURES x i16 LE Q15 features, then i16 LE Q15 reward, then u8 flags. */
+#define BRAIN_N_FEATURES 6U
+#define BRAIN_STEP_PAYLOAD_BYTES 15U /**< 6 features x 2 + reward 2 + flags 1 */
+#define BRAIN_FEAT_LUM_LEFT 0U       /**< payload bytes 0..1 */
+#define BRAIN_FEAT_LUM_RIGHT 1U      /**< payload bytes 2..3 */
+#define BRAIN_FEAT_ENEMY_LEFT 2U     /**< payload bytes 4..5 */
+#define BRAIN_FEAT_ENEMY_RIGHT 3U    /**< payload bytes 6..7 */
+#define BRAIN_FEAT_DAMAGE_LEFT 4U    /**< payload bytes 8..9 */
+#define BRAIN_FEAT_DAMAGE_RIGHT 5U   /**< payload bytes 10..11 */
+#define BRAIN_STEP_OFF_REWARD 12U    /**< i16 LE, Q15 signed: -32767..32767 = -1..+1 */
+#define BRAIN_STEP_OFF_FLAGS 14U     /**< u8, BRAIN_STEP_FLAG_* */
+
+/** Apply this STEP's reward and update the learning synapses after the model step. Without
+ *  it nothing learns and turns are decoded against the fixed resting constants (as in v1). */
+#define BRAIN_STEP_FLAG_LEARN (1U << 0)
+/** Before the model step, put the learned weights back to the connectome values. */
+#define BRAIN_STEP_FLAG_RESET_WEIGHTS (1U << 1)
+/** Senders set these to 0; receivers ignore them. */
+#define BRAIN_STEP_FLAG_RESERVED_MASK 0xFCU
 
 /** STEP response payload (BRAIN_STEP_RESP_PAYLOAD_BYTES). */
-#define BRAIN_STEP_RESP_PAYLOAD_BYTES 22U
-#define BRAIN_RESP_OFF_ACTIONS 0U      /**< u8 action bits (BRAIN_ACTION_*) */
-#define BRAIN_RESP_OFF_RESERVED 1U     /**< u8, always 0 in v1; receivers ignore it */
-#define BRAIN_RESP_OFF_STEP_CYCLES 2U  /**< u32 LE, core cycles spent in the model step */
-#define BRAIN_RESP_OFF_STEER_LEFT 6U   /**< f32 LE, mean activity of left steering outputs */
-#define BRAIN_RESP_OFF_STEER_RIGHT 10U /**< f32 LE */
-#define BRAIN_RESP_OFF_FORWARD 14U     /**< f32 LE */
-#define BRAIN_RESP_OFF_BACKWARD 18U    /**< f32 LE */
+#define BRAIN_STEP_RESP_PAYLOAD_BYTES 26U
+#define BRAIN_RESP_OFF_ACTIONS 0U       /**< u8 action bits (BRAIN_ACTION_*) */
+#define BRAIN_RESP_OFF_RESERVED 1U      /**< u8, always 0; receivers ignore it */
+#define BRAIN_RESP_OFF_STEP_CYCLES 2U   /**< u32 LE, core cycles spent in the model step */
+#define BRAIN_RESP_OFF_STEER_LEFT 6U    /**< f32 LE, mean activity of left steering outputs */
+#define BRAIN_RESP_OFF_STEER_RIGHT 10U  /**< f32 LE */
+#define BRAIN_RESP_OFF_FORWARD 14U      /**< f32 LE */
+#define BRAIN_RESP_OFF_BACKWARD 18U     /**< f32 LE */
+#define BRAIN_RESP_OFF_WEIGHT_DRIFT 22U /**< f32 LE, relative L2 change of the learning weights */
 
 /** ERROR response payload (BRAIN_ERROR_PAYLOAD_BYTES). */
 #define BRAIN_ERROR_PAYLOAD_BYTES 2U
@@ -110,7 +130,7 @@
 #define BRAIN_ERR_UNKNOWN_TYPE 1U /**< TYPE is not a request this version knows */
 #define BRAIN_ERR_BAD_LENGTH 2U   /**< LEN does not match the request's payload size */
 #define BRAIN_ERR_BAD_VERSION 3U  /**< VERSION differs from the brain's version */
-#define BRAIN_ERR_BAD_FEATURE 4U  /**< a feature is negative (Q15 value < 0) */
+#define BRAIN_ERR_BAD_FEATURE 4U  /**< a feature is negative (Q15 < 0) or the reward is -32768 */
 
 /* ---- Features (STEP request) ------------------------------------------------------ */
 /*
@@ -132,12 +152,24 @@
  *      not the linear theta / (HFOV / 2). Only enemies the player can actually see count
  *      (line of sight; not behind walls). With no visible enemy both are 0.
  *      Note an enemy exactly at x = 0 also gives 0, 0.
+ *
+ *  DAMAGE_LEFT, DAMAGE_RIGHT : where the last attacker is, felt only while the player is in
+ *      pain. Let a be the attacker's direction relative to the view, in degrees, positive to
+ *      the LEFT (Doom's angle convention), -180..180, and p = pain in 0..1 (Doom's
+ *      damagecount / 100, which fades by one per tic). With s = clamp(a / 90, -1, 1):
+ *          DAMAGE_LEFT = p * max(s, 0)      DAMAGE_RIGHT = p * max(-s, 0)
+ *      An attacker behind the player counts fully to its side. No attacker (or not in pain):
+ *      both 0. ViZDoom senders leave both at 0.
+ *
+ * Reward (STEP request): what just happened to the player, -1..+1, sent as Q15 signed:
+ * q = round(clamp(reward, -1, 1) * 32767). The game side decides it (README: Learning).
+ * Only used with BRAIN_STEP_FLAG_LEARN.
  */
 
 /* ---- Actions (STEP response) ------------------------------------------------------ */
 /*
  * Action bits decided BY THE BRAIN (the connectome-driven part). TURN_LEFT and TURN_RIGHT
- * are mutually exclusive. Bits 2..7 are reserved and are 0 in v1 (forward and backward
+ * are mutually exclusive. Bits 2..7 are reserved and are 0 (forward and backward
  * activities are returned as numbers only). FIRE is NOT a brain bit: the game side decides
  * it with its own heuristic (README: "Simplifications").
  */
@@ -226,18 +258,32 @@ int16_t brain_feature_to_q15(float feature);
 /** @brief Convert Q15 back to a feature (q / 32767). Caller must have rejected q < 0. */
 float brain_feature_from_q15(int16_t q15);
 
+/** @brief Reward -1..+1 to Q15 signed (sender side): round(clamp(r) * 32767); NaN gives 0. */
+int16_t brain_reward_to_q15(float reward);
+
+/** @brief Q15 signed back to a reward (q / 32767). Caller must have rejected -32768. */
+float brain_reward_from_q15(int16_t q15);
+
+/** Decoded STEP request. */
+typedef struct {
+    float features[BRAIN_N_FEATURES]; /**< 0..1 each */
+    float reward;                     /**< -1..+1 */
+    uint8_t flags;                    /**< BRAIN_STEP_FLAG_* */
+} brain_step_req_t;
+
 /**
- * @brief Decode a STEP request payload into features.
+ * @brief Decode a STEP request payload.
  * @param[in]  payload  Payload bytes.
  * @param[in]  len      Payload length.
- * @param[out] features BRAIN_N_FEATURES floats in 0..1.
+ * @param[out] req      Features, reward and flags.
  * @return BRAIN_OK, BRAIN_ERR_NULL, BRAIN_ERR_LENGTH (len != BRAIN_STEP_PAYLOAD_BYTES) or
- *         BRAIN_ERR_FEATURE (a Q15 value is negative; features is then unspecified).
+ *         BRAIN_ERR_FEATURE (a negative feature or a reward of -32768; req is then
+ *         unspecified).
  */
-brain_status_t brain_step_request_decode(const uint8_t *payload, size_t len, float *features);
+brain_status_t brain_step_request_decode(const uint8_t *payload, size_t len, brain_step_req_t *req);
 
-/** @brief Encode a STEP request payload (BRAIN_STEP_PAYLOAD_BYTES) from features in 0..1. */
-brain_status_t brain_step_request_encode(const float *features, uint8_t *payload, size_t cap);
+/** @brief Encode a STEP request payload (BRAIN_STEP_PAYLOAD_BYTES). */
+brain_status_t brain_step_request_encode(const brain_step_req_t *req, uint8_t *payload, size_t cap);
 
 /** Decoded STEP response. */
 typedef struct {
@@ -247,12 +293,13 @@ typedef struct {
     float steer_right;
     float forward;
     float backward;
+    float weight_drift;
 } brain_step_resp_t;
 
 /** @brief Encode a STEP response payload (BRAIN_STEP_RESP_PAYLOAD_BYTES). */
 brain_status_t brain_step_resp_encode(const brain_step_resp_t *resp, uint8_t *payload, size_t cap);
 
-/** @brief Decode a STEP response payload; BRAIN_ERR_LENGTH if len is not 22. */
+/** @brief Decode a STEP response payload; BRAIN_ERR_LENGTH if len is not 26. */
 brain_status_t brain_step_resp_decode(const uint8_t *payload, size_t len, brain_step_resp_t *resp);
 
 /*
@@ -261,13 +308,18 @@ brain_status_t brain_step_resp_decode(const uint8_t *payload, size_t len, brain_
  *  - The master (ESP32 or laptop) sends one request and waits for its response before
  *    sending the next. The brain never sends unsolicited frames.
  *  - The response carries the request's SEQ. The master should time out (suggested
- *    100 ms or more for STEP: the model step takes 27 ms at 64 MHz) and then count a miss; a late response with a stale SEQ is ignored.
+ *    100 ms or more for STEP: the model step takes 27 ms at 64 MHz) and then count a miss; a late
+ * response with a stale SEQ is ignored.
  *  - A frame with a bad CRC or LEN > BRAIN_MAX_PAYLOAD_BYTES is dropped with no reply
  *    (its SEQ cannot be trusted). A frame with a valid CRC that is invalid in content gets
  *    a BRAIN_MSG_ERROR response echoing SEQ: unknown type, wrong LEN for the type, wrong
  *    VERSION, or a negative feature.
- *  - RESET zeroes the neuron state. The resting reference used to decode actions is a
- *    constant of the model and is unchanged by RESET.
+ *  - RESET zeroes the neuron state. It does not touch learned weights (use
+ *    BRAIN_STEP_FLAG_RESET_WEIGHTS). Learned weights live in RAM only: a board reset or power
+ *    cycle returns to the connectome weights.
+ *  - Turn decoding: without BRAIN_STEP_FLAG_LEARN, against the model's fixed resting
+ *    constants (as in v1). With it, against references that follow the steering outputs
+ *    slowly (about 20 s), so learning cannot leave a permanent turn bias.
  *  - Only ONE master may drive the model at a time; the brain does not arbitrate.
  */
 

@@ -2,7 +2,9 @@
 
 Sends the same Q15 features to the board and to the Python model and reports the largest
 activity difference, action disagreements, the board's DWT cycle counts converted to
-microseconds, and host-measured round trips.
+microseconds, and host-measured round trips. The parity run starts with RESET_WEIGHTS and
+learning off; a second, shorter run with learning on measures the extra time of the
+plasticity update (and ends with RESET_WEIGHTS so the board is left on connectome weights).
 
     python -m tools.hw_check [--port /dev/ttyACM2] [--frames 300]
 """
@@ -21,6 +23,7 @@ from game.stm32_backend import SerialLink, Stm32Controller, find_stlink_port
 from model.rate_model import load_graph
 
 DEFAULT_GRAPH = Path("connectome/data/malecns_v1_0_subgraph.json")
+LEARN_FRAMES = 100
 ABS_TOL = 1e-5
 REL_TOL = 1e-4
 
@@ -36,13 +39,18 @@ def main(argv: list[str] | None = None) -> int:
     info = brain.ping()
     print(
         f"INFO: v{info.proto_version}, {info.n_neurons} neurons, {info.substeps} substeps, "
-        f"core clock {info.core_clock_khz} kHz"
+        f"core clock {info.core_clock_khz} kHz, {info.n_learnable} learning synapses"
     )
 
     py = PythonController(load_graph(args.graph))
     rest = measure_rest(py)
     py.reset()
     brain.reset()
+    brain.step(
+        np.zeros(bp.N_FEATURES, dtype=np.float32), flags=bp.STEP_FLAG_RESET_WEIGHTS
+    )
+    brain.reset()
+    brain.cycles.clear()
     rng = np.random.default_rng(11)
     max_diff, action_mismatch, out_of_tol = 0.0, 0, 0
     for _ in range(args.frames):
@@ -79,6 +87,20 @@ def main(argv: list[str] | None = None) -> int:
         f"STEP round trip (host-measured, includes USB serial): mean {trips.mean():.2f} ms, "
         f"p95 {np.percentile(trips, 95):.2f} ms, max {trips.max():.2f} ms"
     )
+
+    brain.cycles.clear()
+    for i in range(LEARN_FRAMES):
+        feats = bp.quantize_features(rng.random(bp.N_FEATURES).astype(np.float32))
+        brain.step(feats, reward=1.0 if i % 10 == 0 else 0.0, flags=bp.STEP_FLAG_LEARN)
+    learn_us = np.array(brain.cycles) / (info.core_clock_khz / 1000.0)
+    print(
+        f"with learning on ({LEARN_FRAMES} frames): model step + plasticity mean "
+        f"{learn_us.mean():.1f} us, max {learn_us.max():.1f} us; drift {brain.last_drift:.4f}"
+    )
+    brain.step(
+        np.zeros(bp.N_FEATURES, dtype=np.float32), flags=bp.STEP_FLAG_RESET_WEIGHTS
+    )
+    brain.reset()
     return 0 if (out_of_tol == 0 and action_mismatch == 0) else 1
 
 

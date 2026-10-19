@@ -3,6 +3,7 @@
 Outputs:
   firmware/generated/model_weights.h / .c   const CSR arrays + index lists + constants
   tests/golden/rate_golden.csv               Python controller inputs and outputs
+  tests/golden/learn_golden.csv              the same with reward-modulated plasticity on
 
 CSR layout (W[post, pre]): row i lists everything flowing INTO neuron i.
   row_ptr[i]..row_ptr[i+1]  -> entries of row i
@@ -19,10 +20,15 @@ from pathlib import Path
 import numpy as np
 
 from game import controller as ctl
+from model import plasticity as pl
 from model import rate_model as rm
 
 GOLDEN_FRAMES = 60
 GOLDEN_SEED = 7
+LEARN_GOLDEN_FRAMES = 120
+LEARN_GOLDEN_SEED = 11
+LEARN_REWARD_EVERY = 9  # frames: +1 (a "kill")
+LEARN_PUNISH_EVERY = 13  # frames: -0.5 ("damage")
 GROUPS = (
     ("INPUT_LEFT", "input", "L", None),
     ("INPUT_RIGHT", "input", "R", None),
@@ -91,6 +97,14 @@ def header_text(
         f"#define MODEL_TONIC_DRIVE {fmt_float(ctl.TONIC_DRIVE)}",
         f"#define MODEL_INPUT_GAIN {fmt_float(ctl.INPUT_GAIN)}",
         f"#define MODEL_LUM_WEIGHT {fmt_float(ctl.LUM_WEIGHT)}",
+        f"#define MODEL_DAMAGE_WEIGHT {fmt_float(ctl.DAMAGE_WEIGHT)}",
+        f"#define MODEL_LEARN_RATE {fmt_float(pl.LEARN_RATE)}",
+        f"#define MODEL_TRACE_DECAY {fmt_float(pl.TRACE_DECAY)}",
+        f"#define MODEL_BASELINE_RATE {fmt_float(pl.BASELINE_RATE)}",
+        f"#define MODEL_REWARD_MEAN_RATE {fmt_float(pl.REWARD_MEAN_RATE)}",
+        f"#define MODEL_FORGET_RATE {fmt_float(pl.FORGET_RATE)}",
+        f"#define MODEL_WEIGHT_MAX_FACTOR {fmt_float(pl.WEIGHT_MAX_FACTOR)}",
+        f"#define MODEL_REST_RATE {fmt_float(pl.REST_RATE)}",
         f"#define MODEL_REST_STEER_LEFT {fmt_float(rest.steer_left)}",
         f"#define MODEL_REST_STEER_RIGHT {fmt_float(rest.steer_right)}",
         f"#define MODEL_TURN_DEADZONE {fmt_float(ctl.TURN_DEADZONE)}",
@@ -139,8 +153,8 @@ def write_golden(graph: rm.Graph, path: Path) -> None:
     controller.reset()
     rows = [
         (
-            "f_lum_l,f_lum_r,f_enemy_l,f_enemy_r,steer_left,steer_right,forward,backward,"
-            "turn_left,turn_right"
+            "f_lum_l,f_lum_r,f_enemy_l,f_enemy_r,f_damage_l,f_damage_r,"
+            "steer_left,steer_right,forward,backward,turn_left,turn_right"
         )
     ]
     for _ in range(GOLDEN_FRAMES):
@@ -161,6 +175,52 @@ def write_golden(graph: rm.Graph, path: Path) -> None:
     path.write_text("\n".join(rows) + "\n")
 
 
+def make_learner(graph: rm.Graph, weights: np.ndarray) -> pl.Plasticity:
+    """Plasticity over the steering neurons (left group, then right), as the firmware sets it up."""
+    rest = ctl.measure_rest(ctl.PythonController(graph))
+    left = [int(i) for i in graph.indices("output", "L", "steer")]
+    right = [int(i) for i in graph.indices("output", "R", "steer")]
+    return pl.Plasticity(
+        weights, left + right, len(left), rest.steer_left, rest.steer_right
+    )
+
+
+def write_learn_golden(graph: rm.Graph, path: Path) -> None:
+    """Controller plus plasticity on random features and sparse rewards, as the STM32 runs it.
+
+    Per frame: model step with the current weights, turn decoding against the moving
+    reference, then the plasticity update with that frame's reward. Columns: features, reward,
+    outputs, turn bits, drift after the update.
+    """
+    rng = np.random.default_rng(LEARN_GOLDEN_SEED)
+    controller = ctl.PythonController(graph)
+    model = controller._model  # the golden needs the live weight matrix
+    model.w = model.w.copy()  # learning must not change graph.weights for other users
+    learner = make_learner(graph, model.w)
+    controller.reset()
+    rows = [
+        (
+            "f_lum_l,f_lum_r,f_enemy_l,f_enemy_r,f_damage_l,f_damage_r,reward,"
+            "steer_left,steer_right,forward,backward,turn_left,turn_right,drift"
+        )
+    ]
+    for frame in range(1, LEARN_GOLDEN_FRAMES + 1):
+        feat = rng.random(ctl.N_FEATURES).astype(np.float32)
+        reward = 0.0
+        if frame % LEARN_REWARD_EVERY == 0:
+            reward += 1.0
+        if frame % LEARN_PUNISH_EVERY == 0:
+            reward -= 0.5
+        out = controller.step(feat)
+        turn_left, turn_right = learner.decode(out.steer_left, out.steer_right)
+        learner.update(model.r, out.steer_left, out.steer_right, reward)
+        vals = [*map(float, feat), reward, out.steer_left, out.steer_right, out.forward]
+        vals += [out.backward, float(turn_left), float(turn_right), learner.drift()]
+        rows.append(",".join(f"{v:.9g}" for v in vals))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(rows) + "\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -169,6 +229,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-dir", type=Path, default=Path("firmware/generated"))
     parser.add_argument(
         "--golden", type=Path, default=Path("tests/golden/rate_golden.csv")
+    )
+    parser.add_argument(
+        "--learn-golden", type=Path, default=Path("tests/golden/learn_golden.csv")
     )
     args = parser.parse_args(argv)
     graph = rm.load_graph(args.graph)
@@ -183,6 +246,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     (args.out_dir / "model_weights.c").write_text(source_text(graph, csr, groups))
     write_golden(graph, args.golden)
+    write_learn_golden(graph, args.learn_golden)
     print(
         f"exported {graph.n} neurons, {len(csr[2])} non-zero weights -> {args.out_dir}"
     )

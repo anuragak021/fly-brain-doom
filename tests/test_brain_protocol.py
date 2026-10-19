@@ -44,6 +44,9 @@ HEADER_CONSTANTS = {
     "BRAIN_ERR_BAD_VERSION": bp.ERR_BAD_VERSION,
     "BRAIN_ERR_BAD_FEATURE": bp.ERR_BAD_FEATURE,
     "BRAIN_ACTION_RESERVED_MASK": 0xFC,
+    "BRAIN_STEP_OFF_REWARD": bp.STEP_OFF_REWARD,
+    "BRAIN_STEP_OFF_FLAGS": bp.STEP_OFF_FLAGS,
+    "BRAIN_STEP_FLAG_RESERVED_MASK": bp.STEP_FLAG_RESERVED_MASK,
 }
 
 
@@ -117,7 +120,7 @@ def test_vectors_roundtrip_and_parse() -> None:
             mtype,
             seq,
             payload,
-            1,
+            bp.PROTOCOL_VERSION,
         )
 
 
@@ -126,15 +129,24 @@ def test_q15_vectors() -> None:
         assert bp.feature_to_q15(float(text)) == int(q)
 
 
+def test_reward_q15_vectors() -> None:
+    for _, text, q in _vector_lines("RQ15"):
+        assert bp.reward_to_q15(float(text)) == int(q)
+
+
 def test_step_request_response_vectors() -> None:
-    [_, f0, f1, f2, f3, hex_payload] = _vector_lines("STEPREQ")[0]
-    feats = np.array([float(f0), float(f1), float(f2), float(f3)], dtype=np.float32)
-    assert bp.encode_step_request(feats).hex() == hex_payload
+    [_, *fields, reward, flags, hex_payload] = _vector_lines("STEPREQ")[0]
+    feats = np.array([float(f) for f in fields], dtype=np.float32)
+    assert len(feats) == bp.N_FEATURES
+    payload = bp.encode_step_request(feats, float(reward), int(flags))
+    assert payload.hex() == hex_payload
     back = bp.decode_step_request(bytes.fromhex(hex_payload))
-    assert np.allclose(back, feats, atol=1 / 32767)
-    [_, act, cyc, sl, sr, fw, bk, resp_hex] = _vector_lines("STEPRESP")[0]
+    assert np.allclose(back.features, feats, atol=1 / 32767)
+    assert abs(back.reward - float(reward)) <= 1 / 32767
+    assert back.flags == int(flags)
+    [_, act, cyc, sl, sr, fw, bk, drift, resp_hex] = _vector_lines("STEPRESP")[0]
     resp = bp.StepResponse(
-        int(act), int(cyc), float(sl), float(sr), float(fw), float(bk)
+        int(act), int(cyc), float(sl), float(sr), float(fw), float(bk), float(drift)
     )
     assert bp.encode_step_response(resp).hex() == resp_hex
     assert bp.decode_step_response(bytes.fromhex(resp_hex)) == resp
@@ -142,9 +154,22 @@ def test_step_request_response_vectors() -> None:
 
 def test_negative_feature_and_bad_length_rejected() -> None:
     with pytest.raises(bp.ProtocolError):
-        bp.decode_step_request(bytes([0x00, 0x80]) + bytes(6))
+        bp.decode_step_request(bytes([0x00, 0x80]) + bytes(bp.STEP_PAYLOAD_BYTES - 2))
     with pytest.raises(bp.ProtocolError):
-        bp.decode_step_request(bytes(7))
+        bp.decode_step_request(bytes(bp.STEP_PAYLOAD_BYTES - 1))
+    with pytest.raises(bp.ProtocolError):
+        bp.decode_step_request(bytes(8))  # a v1 STEP
+    bad_reward = bytearray(bp.STEP_PAYLOAD_BYTES)
+    bad_reward[bp.STEP_OFF_REWARD + 1] = 0x80  # -32768
+    with pytest.raises(bp.ProtocolError):
+        bp.decode_step_request(bytes(bad_reward))
+    with pytest.raises(bp.ProtocolError):
+        bp.encode_step_request(np.zeros(bp.N_FEATURES, dtype=np.float32), flags=0x04)
+    reserved = bytearray(bp.STEP_PAYLOAD_BYTES)
+    reserved[bp.STEP_OFF_FLAGS] = 0xFF
+    assert bp.decode_step_request(bytes(reserved)).flags == (
+        bp.STEP_FLAG_LEARN | bp.STEP_FLAG_RESET_WEIGHTS
+    )
     with pytest.raises(bp.ProtocolError):
         bp.encode_frame(bp.MSG_STEP, 0, bytes(bp.MAX_PAYLOAD_BYTES + 1))
 

@@ -56,7 +56,12 @@ def sim_exe(tmp_path_factory: pytest.TempPathFactory) -> Path:
     exe = tmp_path_factory.mktemp("sim") / "brain_sim"
     sources = [ROOT / "tests/c/brain_sim.c"] + [
         FW / "src" / name
-        for name in ("brain_server.c", "brain_protocol.c", "rate_model.c")
+        for name in (
+            "brain_server.c",
+            "brain_protocol.c",
+            "rate_model.c",
+            "plasticity.c",
+        )
     ]
     subprocess.run(
         [
@@ -98,6 +103,7 @@ def test_ping_reports_model_parameters(brain: backend.Stm32Controller) -> None:
     assert info.n_features == bp.N_FEATURES
     assert info.n_neurons == 300
     assert info.substeps == 6
+    assert info.n_learnable == 320
 
 
 def test_wire_parity_with_python_model(brain: backend.Stm32Controller) -> None:
@@ -109,8 +115,11 @@ def test_wire_parity_with_python_model(brain: backend.Stm32Controller) -> None:
     rng = np.random.default_rng(5)
     max_diff = 0.0
     turns = 0
-    for _ in range(80):
-        feats = bp.quantize_features(rng.random(bp.N_FEATURES).astype(np.float32))
+    for i in range(80):
+        raw = rng.random(bp.N_FEATURES).astype(np.float32)
+        if i % 4 != 0:
+            raw[4:] = 0.0  # all six random saturates both sides and almost never turns
+        feats = bp.quantize_features(raw)
         want = py.step(feats)
         got = brain.step(feats)
         for a, b in zip(
@@ -130,7 +139,7 @@ def test_wire_parity_with_python_model(brain: backend.Stm32Controller) -> None:
 
 
 def test_reset_restarts_dynamics(brain: backend.Stm32Controller) -> None:
-    feats = np.array([0.3, 0.1, 0.6, 0.0], dtype=np.float32)
+    feats = np.array([0.3, 0.1, 0.6, 0.0, 0.2, 0.0], dtype=np.float32)
     first = brain.step(feats)
     for _ in range(10):
         brain.step(feats)
@@ -144,10 +153,12 @@ def test_error_reply_raises(brain: backend.Stm32Controller) -> None:
         brain._transact(0x55)
     assert exc.value.code == bp.ERR_UNKNOWN_TYPE
     with pytest.raises(backend.BrainError) as exc:
-        brain._transact(bp.MSG_STEP, bytes([0x00, 0x80]) + bytes(6))  # negative Q15
+        brain._transact(
+            bp.MSG_STEP, bytes([0x00, 0x80]) + bytes(bp.STEP_PAYLOAD_BYTES - 2)
+        )  # negative Q15
     assert exc.value.code == bp.ERR_BAD_FEATURE
     with pytest.raises(backend.BrainError) as exc:
-        brain._transact(bp.MSG_STEP, bytes(7))
+        brain._transact(bp.MSG_STEP, bytes(8))  # a v1 STEP
     assert exc.value.code == bp.ERR_BAD_LENGTH
     assert brain.ping().n_neurons == 300  # still alive after the errors
 
@@ -166,5 +177,27 @@ def test_timeout_counts_misses_and_raises(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(backend, "REPLY_TIMEOUT_S", 0.01)
     ctl = backend.Stm32Controller(DeadLink())
     with pytest.raises(backend.LinkTimeout):
-        ctl.step(np.zeros(4, dtype=np.float32))
+        ctl.step(np.zeros(bp.N_FEATURES, dtype=np.float32))
     assert ctl.misses == backend.RETRIES + 1
+
+
+def test_learning_changes_weights_and_reset_weights_restores(
+    brain: backend.Stm32Controller,
+) -> None:
+    """LEARN with reward moves the weights (drift > 0); RESET keeps them; RESET_WEIGHTS
+    returns to the connectome (drift 0, same outputs as before learning)."""
+    feats = np.array([0.2, 0.7, 0.0, 0.8, 0.0, 0.5], dtype=np.float32)
+    brain.reset()
+    before = brain.step(feats, flags=bp.STEP_FLAG_RESET_WEIGHTS)
+    assert brain.last_drift == 0.0
+    for i in range(60):
+        brain.step(feats, reward=1.0 if i % 4 == 0 else -0.2, flags=bp.STEP_FLAG_LEARN)
+    learned = brain.last_drift
+    assert learned > 0.0
+    brain.reset()
+    brain.step(feats)
+    assert brain.last_drift == learned  # RESET does not touch weights; no LEARN: frozen
+    brain.reset()
+    again = brain.step(feats, flags=bp.STEP_FLAG_RESET_WEIGHTS)
+    assert brain.last_drift == 0.0
+    assert again == before

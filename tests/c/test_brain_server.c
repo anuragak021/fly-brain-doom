@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "brain_server.h"
+#include "plasticity.h"
 
 #define FAKE_CYCLES_PER_CALL 1000U
 #define N_STEPS 5U
@@ -65,9 +66,13 @@ static brain_frame_t roundtrip(brain_server_t *srv, const brain_frame_t *req)
     return resp;
 }
 
-static void step_payload(const float *features, uint8_t *payload)
+static void step_payload(const float *features, float reward, uint8_t flags, uint8_t *payload)
 {
-    CHECK(brain_step_request_encode(features, payload, BRAIN_STEP_PAYLOAD_BYTES) == BRAIN_OK);
+    brain_step_req_t req;
+    (void)memcpy(req.features, features, sizeof(req.features));
+    req.reward = reward;
+    req.flags = flags;
+    CHECK(brain_step_request_encode(&req, payload, BRAIN_STEP_PAYLOAD_BYTES) == BRAIN_OK);
 }
 
 static void test_ping_info(void)
@@ -84,6 +89,9 @@ static void test_ping_info(void)
                              ((uint32_t)r.payload[BRAIN_INFO_OFF_N_NEURONS + 1U] << 8U);
     CHECK(neurons == MODEL_N_NEURONS);
     CHECK(r.payload[BRAIN_INFO_OFF_SUBSTEPS] == MODEL_SUBSTEPS_PER_FRAME);
+    const uint32_t learnable = (uint32_t)r.payload[BRAIN_INFO_OFF_N_LEARNABLE] |
+                               ((uint32_t)r.payload[BRAIN_INFO_OFF_N_LEARNABLE + 1U] << 8U);
+    CHECK((learnable == srv.learn.n) && (learnable > 0U));
     const uint8_t *c = &r.payload[BRAIN_INFO_OFF_CORE_CLOCK_KHZ];
     CHECK((uint32_t)c[0] + ((uint32_t)c[1] << 8U) + ((uint32_t)c[2] << 16U) +
               ((uint32_t)c[3] << 24U) ==
@@ -95,14 +103,14 @@ static void test_step_matches_direct_model(void)
 {
     static brain_server_t srv;
     static rm_state_t direct;
-    const float feats[BRAIN_N_FEATURES] = {0.2F, 0.4F, 0.6F, 0.0F};
-    float quantised[BRAIN_N_FEATURES];
+    const float feats[BRAIN_N_FEATURES] = {0.2F, 0.4F, 0.6F, 0.0F, 0.3F, 0.0F};
+    brain_step_req_t quantised;
     float drive[MODEL_N_NEURONS];
     uint8_t payload[BRAIN_STEP_PAYLOAD_BYTES];
     CHECK(brain_server_init(&srv, 64000U, fake_cycles) == BRAIN_OK);
     CHECK(rm_reset(&direct) == RM_OK);
-    step_payload(feats, payload);
-    CHECK(brain_step_request_decode(payload, sizeof(payload), quantised) == BRAIN_OK);
+    step_payload(feats, 0.5F, 0U, payload); /* reward is ignored without LEARN */
+    CHECK(brain_step_request_decode(payload, sizeof(payload), &quantised) == BRAIN_OK);
     for (uint32_t i = 0U; i < N_STEPS; i++) {
         const brain_frame_t req =
             make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, (uint8_t)i, payload, sizeof(payload));
@@ -113,8 +121,8 @@ static void test_step_matches_direct_model(void)
         bool tr = false;
         CHECK((r.type == BRAIN_MSG_STEP_RESP) && (r.seq == (uint8_t)i));
         CHECK(brain_step_resp_decode(r.payload, r.len, &resp) == BRAIN_OK);
-        CHECK(rm_make_drive(quantised, drive) == RM_OK);
-        CHECK(rm_step(&direct, drive, MODEL_SUBSTEPS_PER_FRAME) == RM_OK);
+        CHECK(rm_make_drive(quantised.features, drive) == RM_OK);
+        CHECK(rm_step(&direct, model_values, drive, MODEL_SUBSTEPS_PER_FRAME) == RM_OK);
         CHECK(rm_outputs(&direct, &o) == RM_OK);
         CHECK(rm_decode_turn(&o, &tl, &tr) == RM_OK);
         CHECK(resp.steer_left == o.steer_left);
@@ -127,18 +135,77 @@ static void test_step_matches_direct_model(void)
         CHECK((resp.actions & (BRAIN_ACTION_TURN_LEFT | BRAIN_ACTION_TURN_RIGHT)) !=
               (BRAIN_ACTION_TURN_LEFT | BRAIN_ACTION_TURN_RIGHT));
         CHECK(resp.step_cycles == (2U * FAKE_CYCLES_PER_CALL) - FAKE_CYCLES_PER_CALL);
+        CHECK(resp.weight_drift == 0.0F);
+    }
+}
+
+/** STEP with LEARN must equal the model plus plasticity run directly, and RESET_WEIGHTS
+ *  must bring the weights back. RESET (neuron state) must not touch them. */
+static void test_learning_matches_direct_and_resets(void)
+{
+    static brain_server_t srv;
+    static rm_state_t direct;
+    static pl_state_t pl;
+    const float feats[BRAIN_N_FEATURES] = {0.1F, 0.8F, 0.0F, 0.6F, 0.0F, 0.4F};
+    brain_step_req_t q;
+    float drive[MODEL_N_NEURONS];
+    uint8_t payload[BRAIN_STEP_PAYLOAD_BYTES];
+    brain_step_resp_t resp;
+    CHECK(brain_server_init(&srv, 64000U, fake_cycles) == BRAIN_OK);
+    CHECK(rm_reset(&direct) == RM_OK);
+    CHECK(pl_init(&pl) == PL_OK);
+    for (uint32_t i = 0U; i < (4U * N_STEPS); i++) {
+        const float reward = ((i % 3U) == 0U) ? 1.0F : -0.25F;
+        step_payload(feats, reward, (uint8_t)BRAIN_STEP_FLAG_LEARN, payload);
+        CHECK(brain_step_request_decode(payload, sizeof(payload), &q) == BRAIN_OK);
+        const brain_frame_t req =
+            make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, (uint8_t)i, payload, sizeof(payload));
+        const brain_frame_t r = roundtrip(&srv, &req);
+        rm_outputs_t o;
+        bool tl = false;
+        bool tr = false;
+        CHECK(brain_step_resp_decode(r.payload, r.len, &resp) == BRAIN_OK);
+        CHECK(rm_make_drive(q.features, drive) == RM_OK);
+        CHECK(rm_step(&direct, pl.w, drive, MODEL_SUBSTEPS_PER_FRAME) == RM_OK);
+        CHECK(rm_outputs(&direct, &o) == RM_OK);
+        CHECK(pl_decode_turn(&pl, &o, &tl, &tr) == PL_OK);
+        CHECK(pl_update(&pl, direct.r, &o, q.reward) == PL_OK);
+        CHECK((resp.steer_left == o.steer_left) && (resp.steer_right == o.steer_right));
+        CHECK(resp.actions ==
+              (uint8_t)((tl ? BRAIN_ACTION_TURN_LEFT : 0U) | (tr ? BRAIN_ACTION_TURN_RIGHT : 0U)));
+        CHECK(resp.weight_drift == pl_drift(&pl));
+    }
+    CHECK(resp.weight_drift > 0.0F);
+    const float learned = resp.weight_drift;
+
+    const brain_frame_t reset = make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_RESET, 1U, NULL, 0U);
+    (void)roundtrip(&srv, &reset);
+    step_payload(feats, 0.0F, 0U, payload);
+    brain_frame_t req =
+        make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, 2U, payload, sizeof(payload));
+    brain_frame_t r = roundtrip(&srv, &req);
+    CHECK(brain_step_resp_decode(r.payload, r.len, &resp) == BRAIN_OK);
+    CHECK(resp.weight_drift == learned); /* frozen, not forgotten */
+
+    step_payload(feats, 0.0F, (uint8_t)BRAIN_STEP_FLAG_RESET_WEIGHTS, payload);
+    req = make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, 3U, payload, sizeof(payload));
+    r = roundtrip(&srv, &req);
+    CHECK(brain_step_resp_decode(r.payload, r.len, &resp) == BRAIN_OK);
+    CHECK(resp.weight_drift == 0.0F);
+    for (uint32_t k = 0U; k < MODEL_NNZ; k++) {
+        CHECK(srv.learn.w[k] == model_values[k]);
     }
 }
 
 static void test_reset_returns_to_first_step(void)
 {
     static brain_server_t srv;
-    const float feats[BRAIN_N_FEATURES] = {0.1F, 0.9F, 0.0F, 0.7F};
+    const float feats[BRAIN_N_FEATURES] = {0.1F, 0.9F, 0.0F, 0.7F, 0.0F, 0.0F};
     uint8_t payload[BRAIN_STEP_PAYLOAD_BYTES];
     brain_step_resp_t first;
     brain_step_resp_t after;
     CHECK(brain_server_init(&srv, 64000U, fake_cycles) == BRAIN_OK);
-    step_payload(feats, payload);
+    step_payload(feats, 0.0F, 0U, payload);
     const brain_frame_t step =
         make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, 1U, payload, sizeof(payload));
     brain_frame_t r = roundtrip(&srv, &step);
@@ -169,9 +236,13 @@ static void test_error_replies(void)
     static brain_server_t srv;
     uint8_t good[BRAIN_STEP_PAYLOAD_BYTES] = {0};
     uint8_t negative[BRAIN_STEP_PAYLOAD_BYTES] = {0, 0, 0, 0, 0x00, 0x80, 0, 0};
+    uint8_t bad_reward[BRAIN_STEP_PAYLOAD_BYTES] = {0};
+    bad_reward[BRAIN_STEP_OFF_REWARD + 1U] = 0x80U; /* -32768 */
     CHECK(brain_server_init(&srv, 64000U, fake_cycles) == BRAIN_OK);
 
-    brain_frame_t req = make_req(2U, BRAIN_MSG_PING, 3U, NULL, 0U);
+    brain_frame_t req = make_req(1U, BRAIN_MSG_PING, 3U, NULL, 0U); /* a v1 master */
+    expect_error(&srv, &req, BRAIN_ERR_BAD_VERSION);
+    req = make_req(3U, BRAIN_MSG_PING, 3U, NULL, 0U);
     expect_error(&srv, &req, BRAIN_ERR_BAD_VERSION);
     req = make_req(BRAIN_PROTOCOL_VERSION, 0x55U, 4U, NULL, 0U);
     expect_error(&srv, &req, BRAIN_ERR_UNKNOWN_TYPE);
@@ -181,8 +252,12 @@ static void test_error_replies(void)
     expect_error(&srv, &req, BRAIN_ERR_BAD_LENGTH);
     req = make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_RESET, 7U, good, 2U);
     expect_error(&srv, &req, BRAIN_ERR_BAD_LENGTH);
-    req = make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, 8U, good, 7U);
+    req = make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, 8U, good, 8U); /* a v1 STEP size */
     expect_error(&srv, &req, BRAIN_ERR_BAD_LENGTH);
+    req = make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, 8U, good, 14U);
+    expect_error(&srv, &req, BRAIN_ERR_BAD_LENGTH);
+    req = make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, 9U, bad_reward, sizeof(bad_reward));
+    expect_error(&srv, &req, BRAIN_ERR_BAD_FEATURE);
     req = make_req(BRAIN_PROTOCOL_VERSION, BRAIN_MSG_STEP, 9U, negative, sizeof(negative));
     expect_error(&srv, &req, BRAIN_ERR_BAD_FEATURE);
 }
@@ -208,6 +283,7 @@ int main(void)
 {
     test_ping_info();
     test_step_matches_direct_model();
+    test_learning_matches_direct_and_resets();
     test_reset_returns_to_first_step();
     test_error_replies();
     test_null_and_size_errors();

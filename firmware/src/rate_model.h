@@ -15,8 +15,8 @@
 
 #include "model_weights.h"
 
-/** Number of values in the feature vector (luminance L/R, enemy L/R). */
-#define RM_N_FEATURES 4U
+/** Number of values in the feature vector (luminance L/R, enemy L/R, damage L/R). */
+#define RM_N_FEATURES 6U
 
 /** Status codes; RM_OK is zero. */
 typedef enum { RM_OK = 0, RM_ERR_NULL = 1, RM_ERR_RANGE = 2 } rm_status_t;
@@ -26,7 +26,9 @@ typedef enum {
     RM_FEAT_LUM_LEFT = 0,
     RM_FEAT_LUM_RIGHT = 1,
     RM_FEAT_ENEMY_LEFT = 2,
-    RM_FEAT_ENEMY_RIGHT = 3
+    RM_FEAT_ENEMY_RIGHT = 3,
+    RM_FEAT_DAMAGE_LEFT = 4,
+    RM_FEAT_DAMAGE_RIGHT = 5
 } rm_feature_t;
 
 /** Mean activity of each output group. */
@@ -54,7 +56,8 @@ rm_status_t rm_reset(rm_state_t *st);
  * @brief Build the per neuron drive vector from a feature vector.
  *
  * Non-input neurons get MODEL_TONIC_DRIVE. Input neurons on each side get
- * MODEL_INPUT_GAIN * (enemy + MODEL_LUM_WEIGHT * luminance) for that side.
+ * MODEL_INPUT_GAIN * (enemy + MODEL_LUM_WEIGHT * luminance + MODEL_DAMAGE_WEIGHT * damage)
+ * for that side.
  *
  * @param[in]  features  RM_N_FEATURES values, each expected in 0..1.
  * @param[out] drive     MODEL_N_NEURONS values.
@@ -65,11 +68,13 @@ rm_status_t rm_make_drive(const float *features, float *drive);
 /**
  * @brief Advance the model by `substeps` Euler steps under a constant drive.
  * @param[in,out] st        Model state.
+ * @param[in]     values    MODEL_NNZ weights in CSR order: model_values (the connectome) or a
+ *                          learning copy of it (plasticity.h).
  * @param[in]     drive     MODEL_N_NEURONS values.
  * @param[in]     substeps  Number of steps; must be in 1..RM_MAX_SUBSTEPS.
  * @return RM_OK, RM_ERR_NULL, or RM_ERR_RANGE.
  */
-rm_status_t rm_step(rm_state_t *st, const float *drive, uint32_t substeps);
+rm_status_t rm_step(rm_state_t *st, const float *values, const float *drive, uint32_t substeps);
 
 /**
  * @brief Pool the output groups into mean activities.

@@ -91,13 +91,14 @@ static void test_routing_and_isolation(void)
     brain_link_t la, lb;
     brain_link_result_t res;
     uint8_t step[BRAIN_STEP_PAYLOAD_BYTES];
-    const float feats[BRAIN_N_FEATURES] = {0.5F, 0.5F, 0.0F, 0.9F};
+    const brain_step_req_t req = {
+        .features = {0.5F, 0.5F, 0.0F, 0.9F, 0.0F, 0.0F}, .reward = 0.0F, .flags = 0U};
     (void)memset(&a, 0, sizeof(a));
     (void)memset(&b, 0, sizeof(b));
     CHECK(brain_server_init(&srv, FAKE_CLOCK_KHZ, fake_cycles) == BRAIN_OK);
     CHECK(brain_link_init(&la, fake_read, fake_write, &a) == BRAIN_OK);
     CHECK(brain_link_init(&lb, fake_read, fake_write, &b) == BRAIN_OK);
-    CHECK(brain_step_request_encode(feats, step, sizeof(step)) == BRAIN_OK);
+    CHECK(brain_step_request_encode(&req, step, sizeof(step)) == BRAIN_OK);
 
     feed(&a, BRAIN_MSG_PING, 11U, NULL, 0U);
     feed(&b, BRAIN_MSG_STEP, 22U, step, BRAIN_STEP_PAYLOAD_BYTES);

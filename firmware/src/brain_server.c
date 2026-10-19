@@ -45,6 +45,8 @@ static brain_status_t handle_ping(const brain_server_t *srv, const brain_frame_t
     p[BRAIN_INFO_OFF_N_NEURONS + 1U] = (uint8_t)(MODEL_N_NEURONS >> U16_SHIFT_8);
     p[BRAIN_INFO_OFF_SUBSTEPS] = (uint8_t)MODEL_SUBSTEPS_PER_FRAME;
     put_u32(&p[BRAIN_INFO_OFF_CORE_CLOCK_KHZ], srv->core_clock_khz);
+    p[BRAIN_INFO_OFF_N_LEARNABLE] = (uint8_t)(srv->learn.n & BYTE_MASK);
+    p[BRAIN_INFO_OFF_N_LEARNABLE + 1U] = (uint8_t)((uint32_t)srv->learn.n >> U16_SHIFT_8);
     return reply(req, BRAIN_MSG_INFO, p, BRAIN_INFO_PAYLOAD_BYTES, out, cap, out_len);
 }
 
@@ -63,27 +65,40 @@ static uint8_t action_bits(bool turn_left, bool turn_right)
 static brain_status_t handle_step(brain_server_t *srv, const brain_frame_t *req, uint8_t *out,
                                   size_t cap, size_t *out_len)
 {
-    float features[BRAIN_N_FEATURES];
+    brain_step_req_t step;
     float drive[MODEL_N_NEURONS];
     rm_outputs_t outputs;
     bool turn_left = false;
     bool turn_right = false;
     uint8_t payload[BRAIN_STEP_RESP_PAYLOAD_BYTES];
 
-    const brain_status_t dec = brain_step_request_decode(req->payload, req->len, features);
+    const brain_status_t dec = brain_step_request_decode(req->payload, req->len, &step);
     if (dec == BRAIN_ERR_LENGTH) {
         return reply_error(req, BRAIN_ERR_BAD_LENGTH, out, cap, out_len);
     }
     if (dec != BRAIN_OK) {
         return reply_error(req, BRAIN_ERR_BAD_FEATURE, out, cap, out_len);
     }
+    const bool learning = (step.flags & BRAIN_STEP_FLAG_LEARN) != 0U;
+    if (((step.flags & BRAIN_STEP_FLAG_RESET_WEIGHTS) != 0U) &&
+        (pl_reset_weights(&srv->learn) != PL_OK)) {
+        return BRAIN_ERR_NULL;
+    }
     const uint32_t t0 = srv->cycles();
-    const rm_status_t s1 = rm_make_drive(features, drive);
-    const rm_status_t s2 = rm_step(&srv->model, drive, MODEL_SUBSTEPS_PER_FRAME);
+    const rm_status_t s1 = rm_make_drive(step.features, drive);
+    const rm_status_t s2 = rm_step(&srv->model, srv->learn.w, drive, MODEL_SUBSTEPS_PER_FRAME);
     const rm_status_t s3 = rm_outputs(&srv->model, &outputs);
-    const rm_status_t s4 = rm_decode_turn(&outputs, &turn_left, &turn_right);
+    bool decoded = false;
+    bool learned = true;
+    if (learning) {
+        /* Decode against the moving references first, then learn from this frame. */
+        decoded = (pl_decode_turn(&srv->learn, &outputs, &turn_left, &turn_right) == PL_OK);
+        learned = (pl_update(&srv->learn, srv->model.r, &outputs, step.reward) == PL_OK);
+    } else {
+        decoded = (rm_decode_turn(&outputs, &turn_left, &turn_right) == RM_OK);
+    }
     const uint32_t cycles = srv->cycles() - t0;
-    if ((s1 != RM_OK) || (s2 != RM_OK) || (s3 != RM_OK) || (s4 != RM_OK)) {
+    if ((s1 != RM_OK) || (s2 != RM_OK) || (s3 != RM_OK) || !decoded || !learned) {
         return reply_error(req, BRAIN_ERR_BAD_FEATURE, out, cap, out_len);
     }
     const brain_step_resp_t resp = {.actions = action_bits(turn_left, turn_right),
@@ -91,7 +106,8 @@ static brain_status_t handle_step(brain_server_t *srv, const brain_frame_t *req,
                                     .steer_left = outputs.steer_left,
                                     .steer_right = outputs.steer_right,
                                     .forward = outputs.forward,
-                                    .backward = outputs.backward};
+                                    .backward = outputs.backward,
+                                    .weight_drift = pl_drift(&srv->learn)};
     if (brain_step_resp_encode(&resp, payload, sizeof(payload)) != BRAIN_OK) {
         return BRAIN_ERR_SIZE;
     }
@@ -107,6 +123,9 @@ brain_status_t brain_server_init(brain_server_t *srv, uint32_t core_clock_khz,
     }
     srv->core_clock_khz = core_clock_khz;
     srv->cycles = cycles;
+    if (pl_init(&srv->learn) != PL_OK) {
+        return BRAIN_ERR_SIZE;
+    }
     return (rm_reset(&srv->model) == RM_OK) ? BRAIN_OK : BRAIN_ERR_NULL;
 }
 

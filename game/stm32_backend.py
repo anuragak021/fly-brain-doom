@@ -95,6 +95,7 @@ class Info:
     n_neurons: int
     substeps: int
     core_clock_khz: int
+    n_learnable: int
 
 
 class Stm32Controller:
@@ -106,6 +107,7 @@ class Stm32Controller:
         self._seq = 0
         self.last_actions = 0
         self.last_cycles = 0
+        self.last_drift = 0.0
         self.misses = 0
         self.round_trips_s: list[float] = []
         self.cycles: list[int] = []
@@ -150,8 +152,7 @@ class Stm32Controller:
         frame = self._transact(bp.MSG_PING)
         if frame.type != bp.MSG_INFO or len(frame.payload) != bp.INFO_PAYLOAD_BYTES:
             raise bp.ProtocolError("malformed INFO response")
-        ver, nfeat, neurons, substeps, khz = struct.unpack("<BBHBI", frame.payload)
-        return Info(ver, nfeat, neurons, substeps, khz)
+        return Info(*struct.unpack("<BBHBIH", frame.payload))
 
     def reset(self) -> None:
         """Zero the neuron state."""
@@ -159,13 +160,21 @@ class Stm32Controller:
         if frame.type != bp.MSG_RESET_RESP:
             raise bp.ProtocolError("unexpected response to RESET")
 
-    def step(self, features: np.ndarray) -> Outputs:
-        """One STEP: features in, pooled output activities out (actions kept in last_actions)."""
-        frame = self._transact(bp.MSG_STEP, bp.encode_step_request(features))
+    def step(
+        self, features: np.ndarray, reward: float = 0.0, flags: int = 0
+    ) -> Outputs:
+        """One STEP: features in, pooled output activities out (actions kept in last_actions).
+
+        Learning is off unless ``flags`` has bp.STEP_FLAG_LEARN; ``reward`` is used only then.
+        """
+        frame = self._transact(
+            bp.MSG_STEP, bp.encode_step_request(features, reward, flags)
+        )
         if frame.type != bp.MSG_STEP_RESP:
             raise bp.ProtocolError("unexpected response to STEP")
         resp = bp.decode_step_response(frame.payload)
         self.last_actions = resp.actions
         self.last_cycles = resp.step_cycles
+        self.last_drift = resp.weight_drift
         self.cycles.append(resp.step_cycles)
         return Outputs(resp.steer_left, resp.steer_right, resp.forward, resp.backward)

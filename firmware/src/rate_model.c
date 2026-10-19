@@ -52,17 +52,19 @@ rm_status_t rm_make_drive(const float *features, float *drive)
         drive[i] = MODEL_TONIC_DRIVE;
     }
     const float left =
-        features[RM_FEAT_ENEMY_LEFT] + (MODEL_LUM_WEIGHT * features[RM_FEAT_LUM_LEFT]);
+        (features[RM_FEAT_ENEMY_LEFT] + (MODEL_LUM_WEIGHT * features[RM_FEAT_LUM_LEFT])) +
+        (MODEL_DAMAGE_WEIGHT * features[RM_FEAT_DAMAGE_LEFT]);
     const float right =
-        features[RM_FEAT_ENEMY_RIGHT] + (MODEL_LUM_WEIGHT * features[RM_FEAT_LUM_RIGHT]);
+        (features[RM_FEAT_ENEMY_RIGHT] + (MODEL_LUM_WEIGHT * features[RM_FEAT_LUM_RIGHT])) +
+        (MODEL_DAMAGE_WEIGHT * features[RM_FEAT_DAMAGE_RIGHT]);
     set_drive(drive, model_input_left, MODEL_N_INPUT_LEFT, MODEL_INPUT_GAIN * left);
     set_drive(drive, model_input_right, MODEL_N_INPUT_RIGHT, MODEL_INPUT_GAIN * right);
     return RM_OK;
 }
 
-rm_status_t rm_step(rm_state_t *st, const float *drive, uint32_t substeps)
+rm_status_t rm_step(rm_state_t *st, const float *values, const float *drive, uint32_t substeps)
 {
-    if ((st == NULL) || (drive == NULL)) {
+    if ((st == NULL) || (values == NULL) || (drive == NULL)) {
         return RM_ERR_NULL;
     }
     if ((substeps == 0U) || (substeps > RM_MAX_SUBSTEPS)) {
@@ -72,7 +74,7 @@ rm_status_t rm_step(rm_state_t *st, const float *drive, uint32_t substeps)
         for (uint32_t row = 0U; row < MODEL_N_NEURONS; row++) {
             float acc = drive[row];
             for (uint32_t k = model_row_ptr[row]; k < model_row_ptr[row + 1U]; k++) {
-                acc += model_values[k] * st->r[model_col_idx[k]];
+                acc += values[k] * st->r[model_col_idx[k]];
             }
             const float target = (acc > 0.0F) ? acc : 0.0F;
             st->next[row] = st->r[row] + (MODEL_ALPHA * (target - st->r[row]));

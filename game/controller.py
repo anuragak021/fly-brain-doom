@@ -17,6 +17,8 @@ from typing import Protocol
 import numpy as np
 
 from game.features import (
+    FEATURE_DAMAGE_L,
+    FEATURE_DAMAGE_R,
     FEATURE_ENEMY_L,
     FEATURE_ENEMY_R,
     FEATURE_LUM_L,
@@ -28,6 +30,9 @@ from model.rate_model import Graph, RateModel
 TONIC_DRIVE = 0.2  # baseline drive to every non-input neuron so the net is active
 INPUT_GAIN = 5.0  # scales feature drive into the input neurons
 LUM_WEIGHT = 0.2  # luminance counts less than the enemy cue
+# Damage direction drives the same input neurons as the enemy cue (a simplification: the real
+# fly would sense this through mechanosensory pathways that this subcircuit does not include).
+DAMAGE_WEIGHT = 1.0
 SETTLE_FRAMES = 15  # frames of zero input used to measure the resting state
 TURN_DEADZONE = 0.02  # |steer difference above rest| needed to turn
 FORWARD_THRESHOLD = 0.05  # forward activity above rest needed to flag "forward"
@@ -80,8 +85,16 @@ class PythonController:
         if features.shape != (N_FEATURES,):
             raise ValueError(f"expected {N_FEATURES} features, got {features.shape}")
         drive = self._tonic.copy()
-        left = features[FEATURE_ENEMY_L] + LUM_WEIGHT * features[FEATURE_LUM_L]
-        right = features[FEATURE_ENEMY_R] + LUM_WEIGHT * features[FEATURE_LUM_R]
+        left = (
+            features[FEATURE_ENEMY_L]
+            + LUM_WEIGHT * features[FEATURE_LUM_L]
+            + DAMAGE_WEIGHT * features[FEATURE_DAMAGE_L]
+        )
+        right = (
+            features[FEATURE_ENEMY_R]
+            + LUM_WEIGHT * features[FEATURE_LUM_R]
+            + DAMAGE_WEIGHT * features[FEATURE_DAMAGE_R]
+        )
         drive[self._in_left] = INPUT_GAIN * left
         drive[self._in_right] = INPUT_GAIN * right
         return drive

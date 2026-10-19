@@ -93,49 +93,79 @@ static void line_q15(const char *line)
     CHECK((int)brain_feature_to_q15(strtof(text, NULL)) == want);
 }
 
+static void line_rq15(const char *line)
+{
+    char text[TOKEN_BYTES];
+    int want;
+    CHECK(sscanf(line, "RQ15 %127s %d", text, &want) == 2);
+    CHECK((int)brain_reward_to_q15(strtof(text, NULL)) == want);
+}
+
 static void line_stepreq(const char *line)
 {
-    char f[4][TOKEN_BYTES];
+    char f[BRAIN_N_FEATURES + 1U][TOKEN_BYTES];
+    unsigned int flags;
     char hex[HEX_BUF_BYTES];
     uint8_t want[HEX_BUF_BYTES];
     uint8_t got[BRAIN_STEP_PAYLOAD_BYTES];
-    float feat[BRAIN_N_FEATURES];
-    float back[BRAIN_N_FEATURES];
-    CHECK(sscanf(line, "STEPREQ %127s %127s %127s %127s %127s", f[0], f[1], f[2], f[3], hex) == 5);
+    brain_step_req_t req;
+    brain_step_req_t back;
+    CHECK(sscanf(line, "STEPREQ %127s %127s %127s %127s %127s %127s %127s %u %127s", f[0], f[1],
+                 f[2], f[3], f[4], f[5], f[6], &flags, hex) == 9);
     for (uint32_t i = 0U; i < BRAIN_N_FEATURES; i++) {
-        feat[i] = strtof(f[i], NULL);
+        req.features[i] = strtof(f[i], NULL);
     }
+    req.reward = strtof(f[BRAIN_N_FEATURES], NULL);
+    req.flags = (uint8_t)flags;
     const size_t n = hex_to_bytes(hex, want, sizeof(want));
     CHECK(n == BRAIN_STEP_PAYLOAD_BYTES);
-    CHECK(brain_step_request_encode(feat, got, sizeof(got)) == BRAIN_OK);
+    CHECK(brain_step_request_encode(&req, got, sizeof(got)) == BRAIN_OK);
     CHECK(same_bytes(got, want, n));
-    CHECK(brain_step_request_decode(want, n, back) == BRAIN_OK);
+    CHECK(brain_step_request_decode(want, n, &back) == BRAIN_OK);
     for (uint32_t i = 0U; i < BRAIN_N_FEATURES; i++) {
-        CHECK(fabsf(back[i] - feat[i]) <= (1.0F / 32767.0F));
+        CHECK(fabsf(back.features[i] - req.features[i]) <= (1.0F / 32767.0F));
     }
-    CHECK(brain_step_request_decode(want, n - 1U, back) == BRAIN_ERR_LENGTH);
-    uint8_t neg[BRAIN_STEP_PAYLOAD_BYTES] = {0x00, 0x80, 0, 0, 0, 0, 0, 0}; /* i16 -32768 */
-    CHECK(brain_step_request_decode(neg, sizeof(neg), back) == BRAIN_ERR_FEATURE);
+    CHECK(fabsf(back.reward - req.reward) <= (1.0F / 32767.0F));
+    CHECK(back.flags == req.flags);
+    CHECK(brain_step_request_decode(want, n - 1U, &back) == BRAIN_ERR_LENGTH);
+
+    uint8_t bad[BRAIN_STEP_PAYLOAD_BYTES];
+    (void)memcpy(bad, want, sizeof(bad));
+    bad[2] = 0x00U; /* feature 1 = i16 -32768 */
+    bad[3] = 0x80U;
+    CHECK(brain_step_request_decode(bad, sizeof(bad), &back) == BRAIN_ERR_FEATURE);
+    (void)memcpy(bad, want, sizeof(bad));
+    bad[BRAIN_STEP_OFF_REWARD] = 0x00U; /* reward -32768 is rejected */
+    bad[BRAIN_STEP_OFF_REWARD + 1U] = 0x80U;
+    CHECK(brain_step_request_decode(bad, sizeof(bad), &back) == BRAIN_ERR_FEATURE);
+    bad[BRAIN_STEP_OFF_REWARD] = 0x01U; /* -32767 = -1.0 is fine */
+    CHECK(brain_step_request_decode(bad, sizeof(bad), &back) == BRAIN_OK);
+    CHECK(back.reward == -1.0F);
+    (void)memcpy(bad, want, sizeof(bad));
+    bad[BRAIN_STEP_OFF_FLAGS] = 0xFFU; /* reserved bits are ignored */
+    CHECK(brain_step_request_decode(bad, sizeof(bad), &back) == BRAIN_OK);
+    CHECK(back.flags == (BRAIN_STEP_FLAG_LEARN | BRAIN_STEP_FLAG_RESET_WEIGHTS));
 }
 
 static void line_stepresp(const char *line)
 {
     unsigned int actions;
     unsigned long cycles;
-    char v[4][TOKEN_BYTES];
+    char v[5][TOKEN_BYTES];
     char hex[HEX_BUF_BYTES];
     uint8_t want[HEX_BUF_BYTES];
     uint8_t got[BRAIN_STEP_RESP_PAYLOAD_BYTES];
     brain_step_resp_t r;
     brain_step_resp_t d;
-    CHECK(sscanf(line, "STEPRESP %u %lu %127s %127s %127s %127s %127s", &actions, &cycles, v[0],
-                 v[1], v[2], v[3], hex) == 7);
+    CHECK(sscanf(line, "STEPRESP %u %lu %127s %127s %127s %127s %127s %127s", &actions, &cycles,
+                 v[0], v[1], v[2], v[3], v[4], hex) == 8);
     r.actions = (uint8_t)actions;
     r.step_cycles = (uint32_t)cycles;
     r.steer_left = strtof(v[0], NULL);
     r.steer_right = strtof(v[1], NULL);
     r.forward = strtof(v[2], NULL);
     r.backward = strtof(v[3], NULL);
+    r.weight_drift = strtof(v[4], NULL);
     const size_t n = hex_to_bytes(hex, want, sizeof(want));
     CHECK(n == BRAIN_STEP_RESP_PAYLOAD_BYTES);
     CHECK(brain_step_resp_encode(&r, got, sizeof(got)) == BRAIN_OK);
@@ -143,6 +173,7 @@ static void line_stepresp(const char *line)
     CHECK(brain_step_resp_decode(want, n, &d) == BRAIN_OK);
     CHECK((d.actions == r.actions) && (d.step_cycles == r.step_cycles));
     CHECK((d.steer_left == r.steer_left) && (d.backward == r.backward));
+    CHECK(d.weight_drift == r.weight_drift);
     CHECK(brain_step_resp_decode(want, n + 1U, &d) == BRAIN_ERR_LENGTH);
 }
 
@@ -189,6 +220,8 @@ static void load_vectors(const char *path)
             line_crc(line);
         } else if (strncmp(line, "Q15 ", 4U) == 0) {
             line_q15(line);
+        } else if (strncmp(line, "RQ15 ", 5U) == 0) {
+            line_rq15(line);
         } else if (strncmp(line, "STEPREQ ", 8U) == 0) {
             line_stepreq(line);
         } else if (strncmp(line, "STEPRESP ", 9U) == 0) {
@@ -220,8 +253,9 @@ static void test_back_to_back_and_garbage(void)
 
 static void test_sof_inside_payload(void)
 {
-    const uint8_t payload[BRAIN_STEP_PAYLOAD_BYTES] = {0xA5U, 0x01U, 0xA5U, 0x02U,
-                                                       0xA5U, 0x02U, 0xA5U, 0x00U};
+    const uint8_t payload[BRAIN_STEP_PAYLOAD_BYTES] = {0xA5U, 0x01U, 0xA5U, 0x02U, 0xA5U,
+                                                       0x02U, 0xA5U, 0x00U, 0xA5U, 0x02U,
+                                                       0xA5U, 0x02U, 0xA5U, 0x02U, 0xA5U};
     uint8_t frame[BRAIN_MAX_FRAME_BYTES];
     size_t len = 0U;
     brain_parser_t p;

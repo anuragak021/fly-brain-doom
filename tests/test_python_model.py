@@ -94,8 +94,10 @@ def test_left_input_turns_left_and_right_input_turns_right() -> None:
     ctrl = PythonController(load_graph(REAL_GRAPH))
     rest = measure_rest(ctrl)
     for feats, expected in (
-        ([0.0, 0.0, 0.8, 0.0], (True, False)),
-        ([0.0, 0.0, 0.0, 0.8], (False, True)),
+        ([0.0, 0.0, 0.8, 0.0, 0.0, 0.0], (True, False)),
+        ([0.0, 0.0, 0.0, 0.8, 0.0, 0.0], (False, True)),
+        ([0.0, 0.0, 0.0, 0.0, 0.8, 0.0], (True, False)),  # hit from the left
+        ([0.0, 0.0, 0.0, 0.0, 0.0, 0.8], (False, True)),
     ):
         ctrl.reset()
         out = rest
