@@ -12,6 +12,7 @@
   "input_rule": "visual superclass neurons",
   "n_neurons": 300,
   "n_edges": 7020,
+  "n_synapses": 299502,
   "n_hop1": 100,
   "n_hop2": 190,
   "weight_convention": "W[post, pre], sign by presynaptic neuron"

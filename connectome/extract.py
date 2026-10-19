@@ -183,6 +183,7 @@ def build_graph(args: argparse.Namespace) -> dict:
         "input_rule": input_rule,
         "n_neurons": len(neurons),
         "n_edges": len(edge_list),
+        "n_synapses": int(sum(e["count"] for e in edge_list)),
         "n_hop1": len(hop1),
         "n_hop2": len(hop2),
         "weight_convention": "W[post, pre], sign by presynaptic neuron",

@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.16)
+project(drosophila_host_tests C)
+
+# Host build of the pure-logic rate model. The STM32 project comes in Phase D.
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
+set(FW ${CMAKE_CURRENT_SOURCE_DIR}/../firmware)
+
+add_compile_options(-Wall -Wextra -Wpedantic -Wconversion -Wshadow -Wdouble-promotion -Werror)
+
+add_executable(test_rate_model
+    c/test_rate_model.c
+    ${FW}/src/rate_model.c
+    ${FW}/generated/model_weights.c)
+target_include_directories(test_rate_model PRIVATE ${FW}/src ${FW}/generated)
+target_link_libraries(test_rate_model PRIVATE m)
+
+enable_testing()
+add_test(NAME rate_model_vs_python
+         COMMAND test_rate_model ${CMAKE_CURRENT_SOURCE_DIR}/golden/rate_golden.csv)

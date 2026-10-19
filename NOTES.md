@@ -101,3 +101,34 @@ is NOT verified, so it is a name-matched stand-in and the forward drive is label
 `connectome/placeholder.py` writes `connectome/data/placeholder_graph.json`, a random graph
 with the real schema, flagged `placeholder: true`. It exists only so Phase B is not blocked.
 It is NOT connectome data and nothing built on it may be described as connectome derived.
+
+## Phase C: export to C
+
+- `model/export_c.py` writes `firmware/generated/model_weights.{h,c}` and `tests/golden/rate_golden.csv`.
+  The header comment records dataset, version, query date, thresholds, neuron and synapse counts.
+- **CSR, not dense.** Dense float32 would be 300 x 300 x 4 = 360 KB; CSR is 6707 non-zeros:
+  values 26.8 KB + uint16 column indices 13.4 KB + row pointers 0.6 KB = about 41 KB of const flash.
+  State (r and the scratch buffer) is 2 x 300 x 4 = 2.4 KB. Index types are uint16, guarded by
+  `_Static_assert` on neuron count and non-zero count.
+- **Why a scratch buffer:** the update is synchronous (every neuron reads the OLD r), matching
+  numpy's `W @ r`. Updating in place would change the dynamics.
+- **One source of truth:** all model constants (alpha, substeps, tonic drive, input gain, luminance
+  weight) are generated into the C header from the Python values, so the two cannot drift apart.
+- **Golden test:** the real `PythonController` runs 60 frames of seeded random features and writes
+  inputs plus the 4 pooled outputs. The C test replays the same features through
+  `rm_make_drive` / `rm_step` / `rm_outputs` and compares with abs 1e-5 + rel 1e-4 tolerance.
+  Sums are accumulated in a different order than BLAS, so bit-exact equality is not expected.
+- **Checks done:** golden values are non-trivial (0.07 to 0.18); swapping the steer columns in a
+  copy of the golden file makes 59 checks fail (so the test can fail); ASan + UBSan clean;
+  cppcheck clean; clang-format clean; built with `-Wall -Wextra -Wpedantic -Wconversion -Wshadow
+  -Wdouble-promotion -Werror`.
+- **A bug the strict build caught:** the generator wrote `5f` for the float 5.0 (invalid C). Fixed in
+  `fmt_float`.
+- **clang-tidy findings accepted:** `bugprone-easily-swappable-parameters` on the static helper
+  `set_drive(drive, idx, count, value)` (internal, 4 call sites, none swapped); in the test file,
+  cognitive-complexity warnings caused by the CHECK macro expansion, and `sscanf` for reading the
+  golden CSV (host-only test reading a file this repo generated).
+- **Not covered by the golden test:** the W[post, pre] convention itself. A transpose in
+  `build_weights` would affect Python and C identically. It is pinned by the Python unit test
+  `test_weight_convention_post_pre_and_signs` on a 3-neuron graph with a known answer.
+- No STM32 timing exists yet. Do not quote a step time until Phase D measures it with DWT.
