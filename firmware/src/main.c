@@ -1,15 +1,18 @@
 /**
  * @file main.c
- * @brief Brain firmware: serve the brain protocol on the ST-Link VCP (USART3).
+ * @brief Brain firmware: serve the brain protocol on two UARTs, the ST-Link VCP (USART3, the
+ *        laptop) and the ESP32 link (USART6), over one shared neuron state.
  *
- * Main loop: bytes from the UART ring go through the protocol parser; each CRC-valid frame is
- * answered by the brain server. LEDs: green toggles on each STEP, yellow on any frame, red
- * lights while a dropped-byte count is non-zero.
+ * Main loop: each link's bytes go through its own protocol parser; each CRC-valid frame is
+ * answered by the brain server on the link it arrived on. Only one master should be stepping at a
+ * time (see brain_link.h). LEDs: green toggles on each STEP, yellow on any frame, red lights on
+ * a failed reply or a non-zero dropped-byte count.
  */
 #include <stdbool.h>
 #include <stdint.h>
 
 #include "board.h"
+#include "brain_link.h"
 #include "brain_protocol.h"
 #include "brain_server.h"
 #include "uart_port.h"
@@ -18,67 +21,64 @@
 
 /* All state is static: no heap, no recursion. Lives in DTCM (see brain.ld). */
 static brain_server_t g_server;
-static brain_parser_t g_parser;
-static uint32_t g_last_rx_ms;
+static brain_link_t g_links[UART_COUNT];
 
-static void send_response(const brain_frame_t *req)
+static bool port_read(void *ctx, uint8_t *byte)
 {
-    uint8_t out[BRAIN_MAX_FRAME_BYTES];
-    size_t out_len = 0U;
-    if (brain_server_handle(&g_server, req, out, sizeof(out), &out_len) != BRAIN_OK) {
-        board_led_set(BOARD_LED_RED, true);
-        return;
-    }
-    if (!uart_write(out, out_len)) {
-        board_led_set(BOARD_LED_RED, true);
-    }
-    board_led_toggle(BOARD_LED_YELLOW);
-    if (req->type == BRAIN_MSG_STEP) {
-        board_led_toggle(BOARD_LED_GREEN);
+    return uart_read_byte(*(const uart_id_t *)ctx, byte);
+}
+
+static bool port_write(void *ctx, const uint8_t *data, size_t len)
+{
+    return uart_write(*(const uart_id_t *)ctx, data, len);
+}
+
+static uart_id_t g_ids[UART_COUNT] = {UART_VCP, UART_ESP};
+
+static void fail_forever(void)
+{
+    board_led_set(BOARD_LED_RED, true);
+    for (;;) {
     }
 }
 
-static void process_byte(uint8_t byte)
+static void show_result(const brain_link_result_t *res)
 {
-    brain_frame_t frame;
-    bool got = false;
-    if (brain_parser_push(&g_parser, byte, &frame, &got) != BRAIN_OK) {
-        return;
+    if (res->frames != 0U) {
+        board_led_toggle(BOARD_LED_YELLOW);
     }
-    while (got) {
-        send_response(&frame);
-        if (brain_parser_poll(&g_parser, &frame, &got) != BRAIN_OK) {
-            return;
-        }
+    if (res->steps != 0U) {
+        board_led_toggle(BOARD_LED_GREEN);
+    }
+    if (res->failed) {
+        board_led_set(BOARD_LED_RED, true);
     }
 }
 
 int main(void)
 {
     board_init();
-    if (!uart_init(UART_BAUD, board_pclk1_hz())) {
-        board_led_set(BOARD_LED_RED, true);
-        for (;;) {
-        }
+    if (!uart_init(UART_VCP, UART_BAUD, board_pclk1_hz()) ||
+        !uart_init(UART_ESP, UART_BAUD, board_pclk2_hz())) {
+        fail_forever();
     }
     if (brain_server_init(&g_server, board_core_hz() / 1000U, board_cycles) != BRAIN_OK) {
-        board_led_set(BOARD_LED_RED, true);
-        for (;;) {
+        fail_forever();
+    }
+    for (uint32_t i = 0U; i < (uint32_t)UART_COUNT; i++) {
+        if (brain_link_init(&g_links[i], port_read, port_write, &g_ids[i]) != BRAIN_OK) {
+            fail_forever();
         }
     }
-    brain_parser_reset(&g_parser);
     for (;;) {
-        uint8_t byte;
-        while (uart_read_byte(&byte)) {
-            g_last_rx_ms = board_millis();
-            process_byte(byte);
-        }
-        if ((g_parser.count != 0U) &&
-            ((board_millis() - g_last_rx_ms) > BRAIN_INTERBYTE_TIMEOUT_MS)) {
-            brain_parser_reset(&g_parser); /* partial frame went stale */
-        }
-        if (uart_drop_count() != 0U) {
-            board_led_set(BOARD_LED_RED, true);
+        for (uint32_t i = 0U; i < (uint32_t)UART_COUNT; i++) {
+            brain_link_result_t res;
+            if (brain_link_service(&g_links[i], &g_server, board_millis(), &res) == BRAIN_OK) {
+                show_result(&res);
+            }
+            if (uart_drop_count(g_ids[i]) != 0U) {
+                board_led_set(BOARD_LED_RED, true);
+            }
         }
     }
 }

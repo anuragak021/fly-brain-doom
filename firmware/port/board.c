@@ -43,6 +43,7 @@
 static volatile uint32_t g_ms;
 static uint32_t g_core_hz = HSI_HZ;
 static uint32_t g_pclk1_hz = HSI_HZ;
+static uint32_t g_pclk2_hz = HSI_HZ;
 
 void SysTick_Handler(void)
 {
@@ -119,6 +120,7 @@ void board_init(void)
     if (clock_to_400mhz()) {
         g_core_hz = CORE_HZ;
         g_pclk1_hz = PCLK1_HZ;
+        g_pclk2_hz = PCLK1_HZ; /* D2PPRE2 uses the same /2 as D2PPRE1 */
     }
 #endif
 #ifdef BRAIN_CACHES
@@ -182,4 +184,9 @@ void board_led_toggle(board_led_t led)
     const uint32_t bit = 1U << led_pin(led);
     GPIO_TypeDef *port = led_port(led);
     port->BSRR = ((port->ODR & bit) != 0U) ? (bit << BSRR_RESET_SHIFT) : bit;
+}
+
+uint32_t board_pclk2_hz(void)
+{
+    return g_pclk2_hz;
 }

@@ -18,6 +18,7 @@ set(OUR_SOURCES
     ${ROOT}/src/main.c
     ${ROOT}/src/brain_server.c
     ${ROOT}/src/brain_protocol.c
+    ${ROOT}/src/brain_link.c
     ${ROOT}/src/rate_model.c
     ${ROOT}/generated/model_weights.c
     ${ROOT}/port/board.c

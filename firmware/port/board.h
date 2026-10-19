@@ -25,6 +25,10 @@ uint32_t board_core_hz(void);
 /** @return Clock of the APB1 peripherals (USART2/3/4/5/7/8) in Hz. */
 uint32_t board_pclk1_hz(void);
 
+/** @return Clock of the APB2 peripherals (USART1/6) in Hz; equal to APB1 with the dividers used
+ * here. */
+uint32_t board_pclk2_hz(void);
+
 /** @return Milliseconds since board_init(). Wraps after about 49 days. */
 uint32_t board_millis(void);
 
