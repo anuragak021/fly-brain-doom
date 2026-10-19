@@ -274,10 +274,22 @@ was added here (`doom-nano/components/brain_link`, `components/doom_platform/i_b
 * The game starts E1M1 at skill 2 directly (`-warp 1 1 -skill 2`, menuconfig `doom-esp32 brain
   link`); without the brain the player stands still.
 
-Status: **builds** with ESP-IDF 5.5.2 (`-Werror`), and 12 host test suites pass (feature vectors,
-policy, HUD). **Not yet run on the ESP32 with the brain**: the board was not attached to this
-computer when this was written, so there are no kills, frame rate or demo numbers for the
-combined system yet.
+Status: builds with ESP-IDF 5.5.2 (`-Werror`), 12 host test suites pass (feature vectors,
+policy, HUD), and **it runs on the real boards** (2026-10-20, ESP32-S3 N16R8 wired to the Nucleo
+on D0/D1, 115,200 baud, STM32 at 64 MHz). Observed in one run of about 4 minutes, read from the
+ESP32 console log:
+
+| What | Value |
+|---|---|
+| link | `brain online: protocol v1, 300 neurons, 6 substeps/step, core 64000 kHz` on first try |
+| brain steps | about 30.6 per second (100 steps per 3.27 s); 0 misses in 55 reporting windows (5,500 steps) |
+| STEP round trip seen by the ESP32 | 32.6 ms (the board's step is 27.1 ms of that; the rest is UART time and the 115,200 baud framing) |
+| game frame rate with the brain attached | 12.3 to 14.0 fps on the OLED (I2C write about 24 ms of each ~72 ms frame) |
+| kills / deaths | 1 kill and 0 deaths in the ~4 minutes observed (the first kill came 133 s after boot) |
+
+That kill count is a single short run and says nothing about how well the brain plays. No
+baseline (fire-only or random turning) has been run, so there is no evidence yet that the
+connectome's turning helps. No demo video yet.
 
 ## Roadmap
 
