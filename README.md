@@ -12,9 +12,10 @@ not a simulation of a fly brain.
 | B: rate model + ViZDoom loop, Python backend | done |
 | C: CSR export to C + host test vs Python | done |
 | Brain protocol v1 (header, C + Python implementations, known-answer vectors) | done, host-tested only |
-| D: STM32 firmware, UART drivers, `--backend stm32`, DWT timing, video | **not started** (needs the Nucleo) |
+| D: STM32 firmware + `--backend stm32` | firmware builds (46 KB image) and the whole stack passes host tests against a simulator; **not yet flashed to the board**, so no STM32 timing and no video yet |
 
-Nothing here has run on the STM32 yet. No STM32 timing, no demo video.
+Nothing here has run on the STM32 yet. No STM32 timing, no demo video. Everything labelled
+"host" below was measured on the laptop or in the host simulator.
 
 ## What was built and measured
 
@@ -71,10 +72,33 @@ python -m tools.gen_protocol_vectors    # protocol known-answer vectors
 pytest                                  # Python tests
 cmake -S tests -B build/tests && cmake --build build/tests && ctest --test-dir build/tests
 python -m game.play --backend python --episodes 5
+
+# firmware (needs arm-none-eabi-gcc); 64 MHz default, -DBRAIN_CPU_400MHZ=ON -DBRAIN_CACHES=ON for 400 MHz
+cmake -S firmware -B build/fw -DCMAKE_TOOLCHAIN_FILE=$PWD/firmware/cmake/arm-none-eabi.cmake
+cmake --build build/fw
+tools/flash_brain.sh                    # WARNING: overwrites flash from 0x08000000 (secure-boot's bootloader)
+python -m tools.hw_check                # board vs Python parity + DWT step time
+python -m game.play --backend stm32     # Doom driven by the board
 ```
 
 `connectome/placeholder.py` writes a random graph with the same schema, flagged `placeholder`. It
 is for development only and is not connectome data.
+
+## Firmware (Phase D)
+
+`firmware/src/main.c` serves the brain protocol on USART3 (the ST-Link virtual COM port,
+115,200 baud). Logic lives in host-tested modules (`rate_model`, `brain_protocol`,
+`brain_server`); `firmware/port/` holds the thin register-level drivers (clock, GPIO, USART3
+with an interrupt-fed ring buffer) on CMSIS, with no HAL. Image: 46,056 bytes of flash and 2,728
+bytes of RAM (the neuron state is in DTCM), built for the Cortex-M7 FPU with the hard-float ABI.
+LEDs: green toggles per STEP, yellow per frame, red on an error or a dropped byte. The firmware is
+linked at 0x08000000 as a standalone application, so flashing it **replaces secure-boot's
+bootloader**; re-flash that project's image to restore it.
+
+The laptop client `game/stm32_backend.py` implements the same `Controller` interface as the Python
+backend. It is tested without hardware against `tests/c/brain_sim.c`, which runs the real parser,
+server and model behind pipes: 80 random frames over the wire matched the Python model within 1e-4
+and gave identical turn actions.
 
 ## Brain protocol (v1)
 

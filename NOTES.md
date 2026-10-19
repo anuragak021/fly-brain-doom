@@ -157,3 +157,45 @@ It is NOT connectome data and nothing built on it may be described as connectome
 - Not yet checked: a MISRA checker was not run (cppcheck's MISRA addon is not configured); the
   "follows MISRA where practical" claim is limited to the choices above and `-Wconversion`-clean,
   fixed-width, no-malloc, no-recursion code.
+
+## Brain protocol and Phase D firmware (design decisions)
+
+- **Frame: SOF + header + CRC-32, not COBS.** Simple to implement on the ESP32 side and easy to
+  read in a logic analyser. Cost: SOF (0xA5) can appear in a payload, so correctness rests on the
+  CRC and on resync-by-one-byte (tested, including a false header that swallows a real frame).
+  Alternative: reuse secure-boot's COBS + 0x00 delimiter, which resyncs trivially. The CRC is the
+  same CRC-32 as secure-boot, so moving to COBS later only changes the framing layer. The version
+  byte is in every frame so a v2 fails loudly instead of garbling.
+- **Offsets, not packed structs.** Packed struct overlays are a compiler/ABI detail and can cause
+  unaligned access on Cortex-M; explicit little-endian put/get helpers are portable.
+- **Decode on the board.** The brain returns action bits AND raw activities. The turn rule needs the
+  resting outputs, deadzone and sign, which are generated from the Python model into
+  `model_weights.h` (one source of truth, no runtime settling). The host cross-checks the board's
+  bits against the Python rule (`decode-mismatch` in `play.py`).
+- **Q15 features everywhere.** Both backends quantize features to Q15 before the model so
+  `--backend python` and `--backend stm32` see identical inputs; otherwise parity would break for a
+  reason that has nothing to do with the firmware.
+- **Fire is not a brain bit; forward/backward bits are reserved.** Fire is a heuristic, and
+  forward/backward have no decode rule or test yet.
+- **No HAL, CMSIS only**, same choice as secure-boot (strict -Wconversion/-Werror builds cleanly; HAL
+  does not). Vendor CMSIS/startup files are copied into `third_party/cmsis` with their Apache-2.0
+  licences, and built without -Werror (the CMSIS include dirs are SYSTEM, so only our code is held
+  to the strict flags).
+- **Hard-float ABI with the FPU.** secure-boot builds soft-float because it does no float math; a
+  float32 model on soft-float would be several times slower.
+- **State in DTCM**, weights in flash. The linker asserts at least 8 KB of DTCM stay free for the
+  stack. There is no heap.
+- **Optional 400 MHz + caches**, as CMake switches (`BRAIN_CPU_400MHZ`, `BRAIN_CACHES`), compiled
+  but untested on hardware. 64 MHz HSI is the default so the first flash uses the known-good clock
+  (the one secure-boot ran on). The PLL path falls back to HSI if a lock/switch wait times out.
+- **Bug class found by the strict build:** the `_init`/`_fini` symbols are missing with
+  `-nostartfiles`; empty stubs are in `port/crt_stubs.c`.
+- **Parser design:** a fixed buffer, bounded loops (each bad candidate removes at least one byte),
+  and a `poll()` to drain buffered frames after a resync. A fuzz test compares the C parser with the
+  Python parser on 300 random corrupted streams.
+- **Flash address conflict:** secure-boot's bootloader owns 0x08000000 and its app slot starts at
+  0x08020400. This firmware is linked at 0x08000000 (as the project spec says), so it replaces the
+  bootloader. Delivering it through the bootloader instead needs a link address of 0x08020400 and a
+  secure-boot image header; that is the roadmap item.
+- **Second UART:** see the README section. Pin facts verified from ST's open pin data; header
+  routing and the Ethernet/USB conflict check still need UM2407 (st.com blocked the download).
