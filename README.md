@@ -263,16 +263,28 @@ was added here (`doom-nano/components/brain_link`, `components/doom_platform/i_b
   vision).
 * **Link task** (`bl_client.c`, UART1 on core 1): sends STEP continuously with the latest features
   and publishes the latest reply. The engine never waits for the brain.
-* **Controls** (`bl_policy.c`, `i_brain_input.c`): **turning is the connectome's** (the board's action
-  bits become left/right arrow key events). These are **heuristics, not the connectome**: fire when
-  a monster is within 0.15 of the screen centre; walk forward whenever not aiming; if forward
-  walking makes no progress for 1 s, turn right and press use for 0.5 s (doors, corners); press use
-  to respawn after death and to dismiss intermission screens. Turn decoding uses the board's
-  action bits; nothing is decoded again on the ESP32.
+* **Controls** (`bl_policy.c`, `i_brain_input.c`). **While a monster is on screen, only the
+  connectome turns the player** (the board's action bits become left/right arrow key events; no
+  heuristic can override them). With no monster on screen the connectome's outputs mostly stay in
+  the dead zone, so the player is moved by **heuristics, not the connectome**, in this priority:
+  1. unstick: forward walking made no progress for 1 s of game time (35 tics): back up, turn about
+     150 degrees and press use (doors); stuck again within 3 s turns the same way again;
+  2. scan: no monster seen for 8 s: turn in place one full circle, stopping as soon as one appears;
+  3. wall avoidance: the centre quarter of the view is at least 55 % wall (from the display
+     pipeline's wall coverage map): turn toward the half with less wall;
+  4. otherwise the connectome's action bits.
+  Also heuristic: fire when a monster is within 0.15 of the screen centre; walk forward whenever
+  not aiming; press use to respawn and to dismiss intermission screens. Every turning tic is
+  logged by source (brain, unstick, scan, wall).
 * **Score**: the OLED's bottom line shows health, **kills** (skull icon, summed over lives and
-  levels) and ammo. The armor field was replaced. Kills and deaths are also logged on the console.
-* The game starts E1M1 at skill 2 directly (`-warp 1 1 -skill 2`, menuconfig `doom-esp32 brain
-  link`); without the brain the player stands still.
+  levels) and ammo. The armor field was replaced. Only kills made by the player count: in single
+  player PrBoom also credits monsters killed by other monsters or barrels to the player, so a
+  three-line hook in `p_inter.c` (`p_player_kills`) counts the player's own kills separately.
+* The game starts **E1M2 at skill 3** directly (`-warp 1 2 -skill 3`, menuconfig `doom-esp32
+  brain link`). E1M1 was tried first: its start room is empty (counted from `doom1.wad`'s THINGS
+  lump, its nearest monster at skill 1 to 3 is about 1,700 map units away), so the player never
+  saw one. E1M2 at skill 3 has 11 monsters within 1,000 units of the start. Without the brain
+  the player stands still.
 
 Status: builds with ESP-IDF 5.5.2 (`-Werror`), 12 host test suites pass (feature vectors,
 policy, HUD), and **it runs on the real boards** (2026-10-20, ESP32-S3 N16R8 wired to the Nucleo
@@ -285,11 +297,27 @@ ESP32 console log:
 | brain steps | about 30.6 per second (100 steps per 3.27 s); 0 misses in 55 reporting windows (5,500 steps) |
 | STEP round trip seen by the ESP32 | 32.6 ms (the board's step is 27.1 ms of that; the rest is UART time and the 115,200 baud framing) |
 | game frame rate with the brain attached | 12.3 to 14.0 fps on the OLED (I2C write about 24 ms of each ~72 ms frame) |
-| kills / deaths | 1 kill and 0 deaths in the ~4 minutes observed (the first kill came 133 s after boot) |
 
-That kill count is a single short run and says nothing about how well the brain plays. No
-baseline (fire-only or random turning) has been run, so there is no evidence yet that the
-connectome's turning helps. No demo video yet.
+An earlier run reported "1 kill" here. That run had an input bug (key events lost while the level
+loaded, so the player stood still) and counted kills made by other monsters; its kill figure is
+withdrawn.
+
+Run of 2026-10-20 after the fixes above, E1M2 skill 3, about 90 s of the ESP32 log (2,931 game
+tics):
+
+| What | Value |
+|---|---|
+| tics with a monster on screen | 495 (17 %) |
+| turning tics by source | connectome 181, wall 507, scan 430, unstick 167 |
+| tics firing (heuristic) | 324 |
+| kills by the player / by anything | 5 / 7 |
+| health / deaths | 78 / 0 |
+| brain link | 0 misses, 27.1 ms board step, 32.7 ms round trip |
+
+The player now leaves the start area and crosses the map (logged positions span about 1,500 by
+1,000 map units). One short run; it says nothing yet about how well the brain plays. No baseline
+(fire-only or random turning) has been run, so there is no evidence yet that the connectome's
+turning helps. No demo video yet.
 
 ## Roadmap
 

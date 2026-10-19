@@ -233,3 +233,32 @@ It is NOT connectome data and nothing built on it may be described as connectome
   sprite map instead of labels), so the tuned constants (input gain, deadzone, turn sign) were not
   re-tuned for Doom and may need adjusting after a real run.
 
+
+### Making the player move and find monsters (2026-10-20)
+
+- **Player stood still: an input bug, not the brain.** PrBoom drops events while `gametic < 3` and
+  clears its key table on every level load, and keys were only posted on a change, so the first
+  key-down was lost. Fix: re-post every key once per game tic. Tradeoff: a few extra events per
+  tic; the alternative (writing `gamekeydown[]` directly) reaches into engine internals.
+- **Timings in game tics, not polls.** `I_StartTic` runs at about 14 Hz on the ESP32 while the game
+  runs 35 tics/s, so the stuck detector counted the wrong thing. It now takes the `leveltime`
+  delta, so "1 s" means 35 tics whatever the frame rate.
+- **The connectome owns turning while a monster is visible.** With no monster on screen its
+  outputs stay in the dead zone (luminance alone is too weak), so something else has to explore.
+  Heuristics only act when no monster is visible, and each turning tic is logged by source so the
+  connectome's share can be reported honestly.
+- **Unstick turned left then right and cancelled out.** On E1M2 the player got trapped at a 32-unit
+  ledge (Doom's step limit is 24) in a funnel of walls. Now it backs up and turns about 150
+  degrees, and a repeat within 3 s keeps the same direction. Turn angles come from PrBoom's
+  keyboard turn rates (`angleturn` 320 then 640 after 6 tics).
+- **Scan.** Monsters are often behind the player, and the brain only sees the screen. After 8 s
+  without one, the player turns a full circle. Alternative considered: a "monster behind" input
+  to the brain, which would need protocol v2.
+- **Wall avoidance** uses the display pipeline's wall coverage map (centre quarter at least 55 %
+  wall). A low ledge only covers part of the height, which is why it missed the E1M2 trap and
+  unstick had to handle it.
+- **Kill count.** In single player PrBoom's `killcount` includes monsters killed by other
+  monsters and barrels (`p_inter.c`). A small hook (`p_player_kills`) counts only the player's
+  kills for the HUD; it is the one change inside the engine's game logic.
+- **E1M2 at skill 3 instead of E1M1 at skill 2.** Counted from `doom1.wad`: E1M1's nearest monster
+  is about 1,700 map units from the start; E1M2 has 11 within 1,000 units.
