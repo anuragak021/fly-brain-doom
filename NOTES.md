@@ -143,7 +143,10 @@ It is NOT connectome data and nothing built on it may be described as connectome
 - **Not covered by the golden test:** the W[post, pre] convention itself. A transpose in
   `build_weights` would affect Python and C identically. It is pinned by the Python unit test
   `test_weight_convention_post_pre_and_signs` on a 3-neuron graph with a known answer.
-- No STM32 timing exists yet. Do not quote a step time until Phase D measures it with DWT.
+- STM32 timing, measured 2026-10-20 with the DWT counter at the 64 MHz default clock: mean 27.27 ms
+  (1,745,267 cycles) per model step of 6 substeps over 300 neurons and about 6.7 k non-zero weights,
+  i.e. about 43 cycles per non-zero weight per substep. Board and Python activities agree to 3.7e-8. Caches and
+  the 400 MHz PLL are the first thing to try for speed; not yet measured.
 
 ## MISRA C:2012 deviations (deliberate)
 

@@ -12,10 +12,22 @@ not a simulation of a fly brain.
 | B: rate model + ViZDoom loop, Python backend | done |
 | C: CSR export to C + host test vs Python | done |
 | Brain protocol v1 (header, C + Python implementations, known-answer vectors) | done, host-tested only |
-| D: STM32 firmware + `--backend stm32` | firmware builds (46 KB image) and the whole stack passes host tests against a simulator; **not yet flashed to the board**, so no STM32 timing and no video yet |
+| D: STM32 firmware + `--backend stm32` | flashed to the Nucleo-H753ZI (2026-10-20) and checked with `tools.hw_check`: board matches the Python model, step time measured (below). The `game.play --backend stm32` run and a demo video are still to do |
 
-Nothing here has run on the STM32 yet. No STM32 timing, no demo video. Everything labelled
-"host" below was measured on the laptop or in the host simulator.
+**Measured on the STM32H753ZI** (`python -m tools.hw_check`, 300 random Q15 feature frames, core at the
+default 64 MHz HSI, no PLL, caches off, USART3 on the ST-Link VCP at 115200):
+
+| What | Value |
+|---|---|
+| board vs Python model, largest activity difference | 3.7e-8 (0 of 1,200 values outside tolerance) |
+| turn actions that disagree with the Python rule | 0 of 300 |
+| link misses (timeouts / retries) | 0 |
+| model step on the board (DWT cycle counter) | mean 27.27 ms (min 27.23, max 27.32), 1,745,267 cycles |
+| STEP round trip as seen by the laptop (USB serial included) | mean 31.3 ms, p95 32.8 ms, max 52.8 ms |
+
+The step is slow at 64 MHz: the loop can make about 30 decisions per second. The 400 MHz PLL and
+caches build option exists but has not been run on the board. No demo video yet. Everything
+labelled "host" below was measured on the laptop or in the host simulator.
 
 ## What was built and measured
 
