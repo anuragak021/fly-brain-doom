@@ -202,3 +202,34 @@ It is NOT connectome data and nothing built on it may be described as connectome
   secure-boot image header; that is the roadmap item.
 - **Second UART:** see the README section. Pin facts verified from ST's open pin data; header
   routing and the Ethernet/USB conflict check still need UM2407 (st.com blocked the download).
+
+## ESP32 integration (doom-nano/) design decisions
+
+- **Why a copy inside this repo.** The doom-nano branch of `doom-esp32` was copied here and
+  changed. The copy has no history and is GPL; `doom-esp32` was not touched. Alternative: keep it in
+  its own repo and send protocol change requests between the two repos. Cost of the copy: two diverging
+  versions until the changes are carried back.
+- **Protocol source of truth.** The ESP build compiles `firmware/src/brain_protocol.c` and its header
+  straight from this repo (a relative path in `brain_link/CMakeLists.txt`) instead of copying them, so
+  the wire format cannot drift. If `doom-nano/` moves out into its own repo, that path has to change.
+- **The engine never waits for the brain.** One STEP round trip is about 31 ms with the STM32 at
+  64 MHz, a Doom tic is 28.6 ms, so a blocking call per tic would halve the game rate. A task on the
+  other core steps the brain with the latest features; the engine reads the latest actions each tic.
+  Consequence: the brain steps at about 30 Hz of wall time, not once per 2 game tics as in the ViZDoom
+  loop (17.5 Hz), so the model's time scale differs from the laptop runs.
+- **Features only from fully rendered 3D frames.** The sprite id map and gray view exist only in the
+  nano style's frames (menus, intermission, wipes use the outline style). When no such frame has
+  arrived for 0.5 s the link task stops stepping and, after 0.25 s without a reply, the engine releases
+  every key. No brain, no action.
+- **Fire, forward, unstick, respawn are heuristics** because protocol v1 has no outputs for them
+  (action bits 2..7 are reserved). The brain's `forward` activity is returned but unused: there is no
+  calibrated rest level or threshold for it yet. Alternative for later: add a FORWARD action bit with
+  a resting reference decoded on the board, like turning.
+- **Kills as score.** The engine's `killcount` restarts every level, so the HUD shows a counter that
+  only grows (`ib_session_kills`). It replaced the armor field in the HUD, which the brain cannot
+  make use of.
+- **Unverified on hardware:** USART6 on the Nucleo, the ESP32 link, frame rate with the brain
+  attached. Features are not byte-identical to the ViZDoom ones (different luminance source, engine
+  sprite map instead of labels), so the tuned constants (input gain, deadzone, turn sign) were not
+  re-tuned for Doom and may need adjusting after a real run.
+

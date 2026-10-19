@@ -261,7 +261,7 @@ brain_status_t brain_step_resp_decode(const uint8_t *payload, size_t len, brain_
  *  - The master (ESP32 or laptop) sends one request and waits for its response before
  *    sending the next. The brain never sends unsolicited frames.
  *  - The response carries the request's SEQ. The master should time out (suggested
- *    20 ms for STEP) and then count a miss; a late response with a stale SEQ is ignored.
+ *    100 ms or more for STEP: the model step takes 27 ms at 64 MHz) and then count a miss; a late response with a stale SEQ is ignored.
  *  - A frame with a bad CRC or LEN > BRAIN_MAX_PAYLOAD_BYTES is dropped with no reply
  *    (its SEQ cannot be trusted). A frame with a valid CRC that is invalid in content gets
  *    a BRAIN_MSG_ERROR response echoing SEQ: unknown type, wrong LEN for the type, wrong

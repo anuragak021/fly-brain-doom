@@ -98,11 +98,13 @@ is for development only and is not connectome data.
 
 ## Firmware (Phase D)
 
-`firmware/src/main.c` serves the brain protocol on USART3 (the ST-Link virtual COM port,
-115,200 baud). Logic lives in host-tested modules (`rate_model`, `brain_protocol`,
+`firmware/src/main.c` serves the brain protocol on two UARTs at 115,200 baud: USART3 (the ST-Link
+virtual COM port, for the laptop) and USART6 (PG9 RX / PG14 TX, for the ESP32). Each port has its own
+parser (`brain_link`), all share one neuron state, and a reply goes back on the port its request came
+from. Only one master should be stepping at a time. Logic lives in host-tested modules (`rate_model`, `brain_protocol`,
 `brain_server`); `firmware/port/` holds the thin register-level drivers (clock, GPIO, USART3
-with an interrupt-fed ring buffer) on CMSIS, with no HAL. Image: 46,056 bytes of flash and 2,728
-bytes of RAM (the neuron state is in DTCM), built for the Cortex-M7 FPU with the hard-float ABI.
+with an interrupt-fed ring buffer per port) on CMSIS, with no HAL. Image: 47,068 bytes of flash and
+3,104 bytes of RAM (data + bss) (the neuron state is in DTCM), built for the Cortex-M7 FPU with the hard-float ABI.
 LEDs: green toggles per STEP, yellow per frame, red on an error or a dropped byte. The firmware is
 linked at 0x08000000 as a standalone application, so flashing it **replaces secure-boot's
 bootloader**; re-flash that project's image to restore it.
@@ -205,7 +207,7 @@ host can check the STM32's decode against the Python one.
 
 * One **master** at a time (ESP32 or laptop), one request outstanding. The brain never sends
   unsolicited frames. The response echoes `SEQ`.
-* The master should time out (suggested 20 ms for STEP), count a miss, and ignore a late response
+* The master should time out (at least 100 ms for STEP: the model step alone takes 27 ms at the default 64 MHz clock, measured), count a miss, and ignore a late response
   with a stale `SEQ`.
 * A frame with a **bad CRC** or `LEN > 32` is dropped silently, with no reply, because its `SEQ`
   cannot be trusted. A frame with a **valid CRC but invalid content** (unknown type, wrong `LEN`
@@ -224,23 +226,57 @@ A STEP request is 17 bytes and its response 31 bytes: 48 bytes, 480 bits at 8N1,
 **4.2 ms at 115,200 baud** (0.5 ms at 921,600). This is arithmetic, not a measurement; it excludes
 the model step and driver latency. The default for the first bring-up is 115,200 baud.
 
-### Second UART for the ESP32 link (plan, nothing wired yet)
+### Second UART for the ESP32 link (USART6, implemented; wiring and board test pending)
 
-USART3 (PD8/PD9) is the ST-Link virtual COM port to the laptop and stays that. The ESP32 link needs
-a different UART on the Nucleo headers. Proposed: **USART6 on PG9 (RX) and PG14 (TX), AF7**. Status
-of each fact:
+USART3 (PD8/PD9) is the ST-Link virtual COM port to the laptop and stays that. The ESP32 link is
+**USART6 on PG9 (RX) and PG14 (TX), AF7**, 115,200 baud, APB2 kernel clock. The firmware serves both
+ports (flashed and checked on USART3 on 2026-10-20: the laptop path still passes). **USART6 itself
+has not been exercised on the board yet**: that needs the wires below and the ESP32.
 
 | Fact | Status |
 |---|---|
-| USART6_RX can be PG9 (or PC7); USART6_TX can be PG14 (or PC6); all are AF7 | **verified** from ST's `STM32_open_pin_data` for STM32H753ZITx (fetched 2026-10-19) |
-| PD8/PD9 is USART3 AF7 (the ST-Link VCP) | verified, same source; also matches secure-boot's recorded hardware test |
-| PG9 and PG14 are routed to the Nucleo-144 headers (believed ZIO D0/D1) | **unverified**, needs the UM2407 pin table or a continuity check |
-| No conflict with Ethernet RMII, USB, LEDs (PB0, PE1, PB14) or button PC13 | LEDs and button are from secure-boot's notes; Ethernet and USB pin use is **unverified** |
+| USART6_RX can be PG9; USART6_TX can be PG14; both AF7 | **verified** from ST's `STM32_open_pin_data` for STM32H753ZITx (2026-10-19) |
+| PG9 and PG14 are Nucleo-144 Zio D0 and D1 (CN9 pins 2 and 4) | **from memory of the Nucleo-144 board manual, not checked here**: read the D0 / D1 labels on CN9 before wiring |
+| No conflict with Ethernet RMII, USB, LEDs (PB0, PE1, PB14) or button PC13 | LEDs and button from secure-boot's notes; Ethernet and USB pin use **unverified** |
 
-Alternatives, all valid UART pins per ST data: UART7 on PE7/PE8 or PF6/PF7 (AF7), USART6 on
-PC6/PC7. Avoid UART8 (PE0/PE1): PE1 is the LD2 LED in secure-boot. Both ends are 3.3 V logic with a
-common ground. The pin choice stays "proposed" until you confirm it against UM2407; doom-esp32
-records its own side in its pin map.
+Wiring (3.3 V logic both sides, common ground):
+
+| ESP32-S3 | Nucleo-H753ZI |
+|---|---|
+| GPIO17 (UART1 TX) | PG9 = D0 (RX) |
+| GPIO18 (UART1 RX) | PG14 = D1 (TX) |
+| GND | GND |
+
+## Doom on the ESP32-S3 playing with the brain (`doom-nano/`)
+
+`doom-nano/` is a copy of the `doom-nano` branch of the sibling doom-esp32 project (PrBoom on the
+ESP32-S3, 128x64 OLED, the "nano" look), with the brain link added. It is **GPL-2.0-or-later** (see
+`doom-nano/COPYING` and `THIRD_PARTY.md`); the rest of this repository is separate from it. What
+was added here (`doom-nano/components/brain_link`, `components/doom_platform/i_brain_input.c`):
+
+* **Features** (`bl_features.c`): the same four numbers as `game/features.py` (left and right
+  luminance, enemy left and right), tested against vectors that Python generates
+  (`tools/gen_bl_vectors.py`). Differences from the ViZDoom version: luminance comes from the
+  128x56 gray view shown on the OLED (after the display pipeline's black and white levels); the
+  enemy is the largest live monster in the engine's sprite id map (engine ground truth, not
+  vision).
+* **Link task** (`bl_client.c`, UART1 on core 1): sends STEP continuously with the latest features
+  and publishes the latest reply. The engine never waits for the brain.
+* **Controls** (`bl_policy.c`, `i_brain_input.c`): **turning is the connectome's** (the board's action
+  bits become left/right arrow key events). These are **heuristics, not the connectome**: fire when
+  a monster is within 0.15 of the screen centre; walk forward whenever not aiming; if forward
+  walking makes no progress for 1 s, turn right and press use for 0.5 s (doors, corners); press use
+  to respawn after death and to dismiss intermission screens. Turn decoding uses the board's
+  action bits; nothing is decoded again on the ESP32.
+* **Score**: the OLED's bottom line shows health, **kills** (skull icon, summed over lives and
+  levels) and ammo. The armor field was replaced. Kills and deaths are also logged on the console.
+* The game starts E1M1 at skill 2 directly (`-warp 1 1 -skill 2`, menuconfig `doom-esp32 brain
+  link`); without the brain the player stands still.
+
+Status: **builds** with ESP-IDF 5.5.2 (`-Werror`), and 12 host test suites pass (feature vectors,
+policy, HUD). **Not yet run on the ESP32 with the brain**: the board was not attached to this
+computer when this was written, so there are no kills, frame rate or demo numbers for the
+combined system yet.
 
 ## Roadmap
 
