@@ -24,9 +24,12 @@ Nothing here has run on the STM32 yet. No STM32 timing, no demo video.
   controller step about 0.14 ms. These are host numbers, not STM32 numbers.
 * Defend-the-center, 5 episodes: 0, 2, 2, 0, 1 kills. Episodes are short (about 110 to 200
   decisions). No baseline was run, so this does not show the controller plays well.
-* When an enemy was off-centre, the controller turned toward it in 40 of 42 frames, away in 0.
+* When an enemy was off-centre, the controller turned toward it in 40 of 42 frames, away in 0. This
+  only shows the pipeline is consistent after the readout sign was chosen to approach; it is not
+  independent evidence that the connectome aims.
 * C model vs Python reference: 60 golden frames agree within abs 1e-5 + rel 1e-4 (`ctest`).
-* Weights as CSR in flash: about 41 KB.
+* Weights as CSR in flash: 40,892 bytes of read-only data, measured on a Cortex-M7 cross-compiled
+  object (`arm-none-eabi-gcc -Os`, unlinked). The code is 516 bytes. Linked footprint comes in Phase D.
 
 ## Simplifications (all of them)
 
@@ -51,7 +54,7 @@ Nothing here has run on the STM32 yet. No STM32 timing, no demo video.
 ## Reproduce
 
 ```
-python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+uv venv --python 3.14 && . .venv/bin/activate && uv pip install -r requirements.txt   # needs Python >= 3.12
 export NEUPRINT_APPLICATION_CREDENTIALS=<your neuPrint token>   # never commit it
 python connectome/extract.py            # needs the token; writes connectome/data/*.json
 python -m model.export_c                # CSR C files + golden vectors

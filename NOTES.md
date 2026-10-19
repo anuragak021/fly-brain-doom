@@ -9,7 +9,9 @@ Every simplification is listed in the "Simplifications" section below.
 
 ## Environment
 
-- Python 3.10 venv in `.venv/` (created with `uv`), dependencies pinned in `requirements.txt`.
+- Python **3.14.6** venv in `.venv/` (created with `uv`, `.python-version` pins 3.14). The pinned
+  `numpy==2.5.4` needs Python >= 3.12, so the system Python 3.10 cannot install `requirements.txt`.
+  Dependencies are pinned in `requirements.txt`.
 - `neuprint-python` reads the API token from `NEUPRINT_APPLICATION_CREDENTIALS`
   (checked in the library source). The token is never written to any file.
 - ViZDoom 1.3.2 ships the standard scenarios (`basic.cfg`, `defend_the_center.cfg`).
@@ -32,6 +34,10 @@ Every simplification is listed in the "Simplifications" section below.
    inhibitory via GluCl in many fly circuits but excitatory at some synapses); octopamine and other
    modulators weight 0 (dropped). Neurons below 0.5 prediction confidence would be 'unknown' and dropped.
 5. Rate model, not spiking.
+5b. Input asymmetry: the subgraph has 9 left and 5 right input neurons, and every input neuron on a
+   side receives the same drive. The left side therefore gets more total drive. The decode is
+   taken relative to the resting state and the network is not symmetric either, so the rest-relative
+   readout is doing some balancing work; a perfectly symmetric network would not need it.
 6. Row normalisation (each neuron's total input magnitude = 1) then global scaling so the
    spectral radius of |W| = 0.9. This guarantees no runaway but also discards the absolute
    synapse-count differences between neurons.
@@ -57,6 +63,8 @@ Every simplification is listed in the "Simplifications" section below.
   steerR by +0.011; right drive changed steerR by -0.107 and steerL by -0.012 (mirror symmetric).
 - When an enemy was off-centre the controller turned toward it in 40 of 42 frames and away in 0
   (the other 2 were inside the deadzone). Frames are few because episodes are short.
+- The 40/42 figure only shows the pipeline is self-consistent after `TURN_SIGN` was chosen to make
+  the agent approach. It is NOT independent evidence that the connectome itself aims.
 - Kills per episode: 0, 2, 2, 0, 1 (mean 1.0). No baseline comparison yet, so this is not
   evidence the controller plays well.
 - Python controller step: about 0.14 ms; whole loop about 1650 decisions/s (headless, 2 tics per decision).
@@ -107,7 +115,11 @@ It is NOT connectome data and nothing built on it may be described as connectome
 - `model/export_c.py` writes `firmware/generated/model_weights.{h,c}` and `tests/golden/rate_golden.csv`.
   The header comment records dataset, version, query date, thresholds, neuron and synapse counts.
 - **CSR, not dense.** Dense float32 would be 300 x 300 x 4 = 360 KB; CSR is 6707 non-zeros:
-  values 26.8 KB + uint16 column indices 13.4 KB + row pointers 0.6 KB = about 41 KB of const flash.
+  values 26.8 KB + uint16 column indices 13.4 KB + row pointers 0.6 KB = 40.8 KB (computed).
+  **Measured** by cross-compiling for Cortex-M7 (`arm-none-eabi-gcc 10.3.1`, `-mcpu=cortex-m7
+  -mfpu=fpv5-d16 -mfloat-abi=hard`, strict warnings, `-Werror`): `model_weights.c` = 40,892 bytes
+  read-only data at `-Os` (40,898 at `-O2`); `rate_model.c` = 516 bytes code at `-Os`, 664 at `-O2`.
+  These are unlinked object sizes, not a linked image; the real footprint is a Phase D measurement.
   State (r and the scratch buffer) is 2 x 300 x 4 = 2.4 KB. Index types are uint16, guarded by
   `_Static_assert` on neuron count and non-zero count.
 - **Why a scratch buffer:** the update is synchronous (every neuron reads the OLD r), matching
@@ -132,3 +144,16 @@ It is NOT connectome data and nothing built on it may be described as connectome
   `build_weights` would affect Python and C identically. It is pinned by the Python unit test
   `test_weight_convention_post_pre_and_signs` on a 3-neuron graph with a known answer.
 - No STM32 timing exists yet. Do not quote a step time until Phase D measures it with DWT.
+
+## MISRA C:2012 deviations (deliberate)
+
+- **Rule 15.5 (advisory), single point of exit:** every function in `rate_model.c` uses early
+  returns for its NULL and range guards. This keeps nesting shallow and the guards obvious; the
+  alternative would nest the whole body inside the checks.
+- **Floating-point equality in tests:** `test_rate_model.c` compares `== 0.0F` for the no-drive case,
+  where the exact value is 0 by construction (relu of 0, state starts at 0).
+- **Rule 21.6 (standard I/O) in test code:** `stdio` and `sscanf` are used only in the host-only test
+  to read the golden CSV. They are never compiled into firmware.
+- Not yet checked: a MISRA checker was not run (cppcheck's MISRA addon is not configured); the
+  "follows MISRA where practical" claim is limited to the choices above and `-Wconversion`-clean,
+  fixed-width, no-malloc, no-recursion code.
