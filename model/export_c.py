@@ -57,7 +57,9 @@ def fmt_float(v: float) -> str:
     return f"{text}f"
 
 
-def header_text(graph: rm.Graph, nnz: int, sizes: dict[str, int]) -> str:
+def header_text(
+    graph: rm.Graph, nnz: int, sizes: dict[str, int], rest: ctl.Outputs
+) -> str:
     """Contents of model_weights.h."""
     meta = graph.meta
     lines = [
@@ -89,6 +91,10 @@ def header_text(graph: rm.Graph, nnz: int, sizes: dict[str, int]) -> str:
         f"#define MODEL_TONIC_DRIVE {fmt_float(ctl.TONIC_DRIVE)}",
         f"#define MODEL_INPUT_GAIN {fmt_float(ctl.INPUT_GAIN)}",
         f"#define MODEL_LUM_WEIGHT {fmt_float(ctl.LUM_WEIGHT)}",
+        f"#define MODEL_REST_STEER_LEFT {fmt_float(rest.steer_left)}",
+        f"#define MODEL_REST_STEER_RIGHT {fmt_float(rest.steer_right)}",
+        f"#define MODEL_TURN_DEADZONE {fmt_float(ctl.TURN_DEADZONE)}",
+        f"#define MODEL_TURN_SIGN ({ctl.TURN_SIGN}.0F)",
         "",
     ]
     for name, size in sizes.items():
@@ -129,9 +135,13 @@ def write_golden(graph: rm.Graph, path: Path) -> None:
     """Run the real Python controller on random features and record every output."""
     rng = np.random.default_rng(GOLDEN_SEED)
     controller = ctl.PythonController(graph)
+    rest = ctl.measure_rest(controller)
     controller.reset()
     rows = [
-        "f_lum_l,f_lum_r,f_enemy_l,f_enemy_r,steer_left,steer_right,forward,backward"
+        (
+            "f_lum_l,f_lum_r,f_enemy_l,f_enemy_r,steer_left,steer_right,forward,backward,"
+            "turn_left,turn_right"
+        )
     ]
     for _ in range(GOLDEN_FRAMES):
         feat = rng.random(ctl.N_FEATURES).astype(np.float32)
@@ -143,7 +153,10 @@ def write_golden(graph: rm.Graph, path: Path) -> None:
             out.forward,
             out.backward,
         ]
-        rows.append(",".join(f"{v:.9g}" for v in vals))
+        turn_left, turn_right = ctl.decode_action(out, rest)
+        rows.append(
+            ",".join(f"{v:.9g}" for v in vals) + f",{int(turn_left)},{int(turn_right)}"
+        )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(rows) + "\n")
 
@@ -164,7 +177,9 @@ def main(argv: list[str] | None = None) -> int:
     sizes = {n: len(ix) for n, ix in groups.items()}
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / "model_weights.h").write_text(
-        header_text(graph, len(csr[2]), sizes)
+        header_text(
+            graph, len(csr[2]), sizes, ctl.measure_rest(ctl.PythonController(graph))
+        )
     )
     (args.out_dir / "model_weights.c").write_text(source_text(graph, csr, groups))
     write_golden(graph, args.golden)

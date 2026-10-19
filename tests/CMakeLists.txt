@@ -14,9 +14,17 @@ add_executable(test_rate_model
     c/test_rate_model.c
     ${FW}/src/rate_model.c
     ${FW}/generated/model_weights.c)
-target_include_directories(test_rate_model PRIVATE ${FW}/src ${FW}/generated)
+target_include_directories(test_rate_model PRIVATE ${FW}/src ${FW}/include ${FW}/generated)
 target_link_libraries(test_rate_model PRIVATE m)
+
+add_executable(test_brain_protocol
+    c/test_brain_protocol.c
+    ${FW}/src/brain_protocol.c)
+target_include_directories(test_brain_protocol PRIVATE ${FW}/include)
+target_link_libraries(test_brain_protocol PRIVATE m)
 
 enable_testing()
 add_test(NAME rate_model_vs_python
          COMMAND test_rate_model ${CMAKE_CURRENT_SOURCE_DIR}/golden/rate_golden.csv)
+add_test(NAME brain_protocol_vectors
+         COMMAND test_brain_protocol ${CMAKE_CURRENT_SOURCE_DIR}/golden/protocol_vectors.txt)

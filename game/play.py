@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+from game.brain_protocol import quantize_features
 from game.controller import Controller, PythonController, decode_action, measure_rest
 from game.features import Label, make_features
 from model.rate_model import load_graph
@@ -67,6 +68,9 @@ def play_episode(game, controller: Controller, rest, rng: np.random.Generator) -
         if state is None:
             break
         feat, offset = make_features(state.screen_buffer, read_labels(state))
+        feat = quantize_features(
+            feat
+        )  # what the brain sees on the wire (Q15), any backend
         t0 = time.perf_counter()
         out = controller.step(feat)
         ctrl_time += time.perf_counter() - t0

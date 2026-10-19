@@ -10,6 +10,7 @@
 #ifndef RATE_MODEL_H
 #define RATE_MODEL_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "model_weights.h"
@@ -77,6 +78,20 @@ rm_status_t rm_step(rm_state_t *st, const float *drive, uint32_t substeps);
  * @return RM_OK or RM_ERR_NULL.
  */
 rm_status_t rm_outputs(const rm_state_t *st, rm_outputs_t *out);
+
+/**
+ * @brief Decode turn actions from output activities, relative to the resting state.
+ *
+ * diff = ((steer_right - rest_right) - (steer_left - rest_left)) * MODEL_TURN_SIGN;
+ * turn left if diff > MODEL_TURN_DEADZONE, turn right if diff < -MODEL_TURN_DEADZONE.
+ * The two outputs are mutually exclusive. Same rule as `decode_action` in game/controller.py.
+ *
+ * @param[in]  out         Group means from rm_outputs().
+ * @param[out] turn_left   True to turn left.
+ * @param[out] turn_right  True to turn right.
+ * @return RM_OK or RM_ERR_NULL.
+ */
+rm_status_t rm_decode_turn(const rm_outputs_t *out, bool *turn_left, bool *turn_right);
 
 /** Upper bound on substeps per call (guards against absurd external input). */
 #define RM_MAX_SUBSTEPS 64U

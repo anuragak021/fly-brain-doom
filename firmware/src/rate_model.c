@@ -95,3 +95,16 @@ rm_status_t rm_outputs(const rm_state_t *st, rm_outputs_t *out)
     out->backward = mean_of(st->r, model_backward, MODEL_N_BACKWARD);
     return RM_OK;
 }
+
+rm_status_t rm_decode_turn(const rm_outputs_t *out, bool *turn_left, bool *turn_right)
+{
+    if ((out == NULL) || (turn_left == NULL) || (turn_right == NULL)) {
+        return RM_ERR_NULL;
+    }
+    const float diff =
+        (((out->steer_right - MODEL_REST_STEER_RIGHT) - (out->steer_left - MODEL_REST_STEER_LEFT)) *
+         MODEL_TURN_SIGN);
+    *turn_left = (diff > MODEL_TURN_DEADZONE);
+    *turn_right = (diff < -MODEL_TURN_DEADZONE);
+    return RM_OK;
+}
