@@ -32,6 +32,35 @@ Every simplification is listed in the "Simplifications" section below.
    inhibitory via GluCl in many fly circuits but excitatory at some synapses); octopamine and other
    modulators weight 0 (dropped). Neurons below 0.5 prediction confidence would be 'unknown' and dropped.
 5. Rate model, not spiking.
+6. Row normalisation (each neuron's total input magnitude = 1) then global scaling so the
+   spectral radius of |W| = 0.9. This guarantees no runaway but also discards the absolute
+   synapse-count differences between neurons.
+7. A constant tonic drive (0.2) is given to every non-input neuron. It is NOT in the connectome.
+   Without it the net is silent: the 14 visual inputs alone do not reach the outputs.
+8. Features: left/right mean luminance (grey 160x120 buffer, left half vs right half) and the
+   horizontal position of the largest enemy taken from ViZDoom's labels buffer. The enemy
+   position is game-engine ground truth, not a vision pipeline. Enemy offset to the left drives
+   the left input neurons, to the right the right ones (proportional to |offset|).
+9. Turn decoding uses the steering outputs relative to their resting state:
+   diff = (steerR - steerL) - (rest diff). Positive means turn left. **Sign choice:** measured
+   response is that driving one side's visual inputs LOWERS that side's DNa activity
+   (ipsilateral suppression). If DNa activity meant "turn toward that side", the agent would
+   turn AWAY from enemies. `TURN_SIGN = +1` selects the opposite readout (turn toward the
+   stimulus) so the agent approaches; this is a decoding choice made by me, not a connectome fact.
+10. Fire is a HEURISTIC, not connectome driven: it fires when an enemy is within 0.15 of screen
+    centre. Forward/backward outputs are only logged (defend_the_center has no move buttons).
+
+## Phase B results (Python backend, defend_the_center, 5 episodes, CPU)
+
+- Rate model: tau = 20 ms, Euler dt = 5 ms (alpha 0.25), 6 substeps per decision, float32.
+- Measured response with tonic 0.2 and input gain 5: left visual drive changed steerL by -0.099 and
+  steerR by +0.011; right drive changed steerR by -0.107 and steerL by -0.012 (mirror symmetric).
+- When an enemy was off-centre the controller turned toward it in 40 of 42 frames and away in 0
+  (the other 2 were inside the deadzone). Frames are few because episodes are short.
+- Kills per episode: 0, 2, 2, 0, 1 (mean 1.0). No baseline comparison yet, so this is not
+  evidence the controller plays well.
+- Python controller step: about 0.14 ms; whole loop about 1650 decisions/s (headless, 2 tics per decision).
+- 10 host tests pass (`pytest`): features, weight convention, stability bound, left/right turning.
 
 ## Phase A status (clock started 2026-10-19 21:15 IST, 1.5 h box)
 
