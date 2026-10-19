@@ -262,3 +262,10 @@ It is NOT connectome data and nothing built on it may be described as connectome
   kills for the HUD; it is the one change inside the engine's game logic.
 - **E1M2 at skill 3 instead of E1M1 at skill 2.** Counted from `doom1.wad`: E1M1's nearest monster
   is about 1,700 map units from the start; E1M2 has 11 within 1,000 units.
+- **Door probe (E1M3).** E1M3's start room is closed by a door (`DOOR3`, special 31). Wall
+  avoidance turned away about 200 units before it, and use reaches 64, so the player circled the
+  room. Now a wall ahead triggers, at most every 4 s, 1 s of walking straight at it pressing use.
+  Cost: the player bumps into some plain walls (unstick then backs it out). Alternative: ask the
+  engine whether a usable line is ahead (more ground truth outside the brain); not done.
+- **Auto level exit.** The player cannot navigate to an exit switch, so when `totallive` reaches 0
+  the firmware calls `G_ExitLevel()` after 3 s. Labelled as a shortcut, not play.

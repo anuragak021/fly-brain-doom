@@ -270,11 +270,17 @@ was added here (`doom-nano/components/brain_link`, `components/doom_platform/i_b
   1. unstick: forward walking made no progress for 1 s of game time (35 tics): back up, turn about
      150 degrees and press use (doors); stuck again within 3 s turns the same way again;
   2. scan: no monster seen for 8 s: turn in place one full circle, stopping as soon as one appears;
-  3. wall avoidance: the centre quarter of the view is at least 55 % wall (from the display
+  3. door probe: a wall ahead, at most once every 4 s: walk straight at it for 1 s pressing use
+     (Doom's use reaches only 64 map units, and wall avoidance turns away long before that, so
+     without this the player never opened E1M3's start door);
+  4. wall avoidance: the centre quarter of the view is at least 55 % wall (from the display
      pipeline's wall coverage map): turn toward the half with less wall;
-  4. otherwise the connectome's action bits.
+  5. otherwise the connectome's action bits.
   Also heuristic: fire when a monster is within 0.15 of the screen centre; walk forward whenever
-  not aiming; press use to respawn and to dismiss intermission screens. Every turning tic is
+  not aiming; press use to respawn and to dismiss intermission screens. **Level exit is a
+  shortcut, not play**: the player cannot find the exit switch, so once every monster on the
+  level is dead (the engine's `totallive`), the firmware ends the level 3 s later with
+  `G_ExitLevel()` and the next map starts. Every turning tic is
   logged by source (brain, unstick, scan, wall).
 * **Score**: the OLED's bottom line shows health, **kills** (skull icon, summed over lives and
   levels) and ammo. The armor field was replaced. Only kills made by the player count: in single
@@ -284,7 +290,8 @@ was added here (`doom-nano/components/brain_link`, `components/doom_platform/i_b
   brain link`). E1M1 was tried first: its start room is empty (counted from `doom1.wad`'s THINGS
   lump, its nearest monster at skill 1 to 3 is about 1,700 map units away), so the player never
   saw one. E1M2 at skill 3 has 11 monsters within 1,000 units of the start. Without the brain
-  the player stands still.
+  the player stands still. The start map is a menuconfig option (`DOOM_BRAIN_MAP`, default 2);
+  the board currently runs E1M3.
 
 Status: builds with ESP-IDF 5.5.2 (`-Werror`), 12 host test suites pass (feature vectors,
 policy, HUD), and **it runs on the real boards** (2026-10-20, ESP32-S3 N16R8 wired to the Nucleo
@@ -318,6 +325,11 @@ The player now leaves the start area and crosses the map (logged positions span 
 1,000 map units). One short run; it says nothing yet about how well the brain plays. No baseline
 (fire-only or random turning) has been run, so there is no evidence yet that the connectome's
 turning helps. No demo video yet.
+
+Run of 2026-10-20 on E1M3 skill 3 with the door probe, about 90 s (3,070 tics): the player opened
+the start room's door and went on to the next rooms (logged y from -3,374 to -2,451); 5 kills by
+the player, 0 deaths, 69 of 74 monsters still alive; turning tics: connectome 102, wall 784, unstick
+429, scan 408; 601 tics probing. The auto exit has not fired on the board yet (no level cleared).
 
 ## Roadmap
 
