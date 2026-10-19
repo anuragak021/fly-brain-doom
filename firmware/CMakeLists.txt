@@ -5,6 +5,7 @@ project(brain_firmware C ASM)
 #   cmake -S firmware -B build/fw -DCMAKE_TOOLCHAIN_FILE=firmware/cmake/arm-none-eabi.cmake
 #   cmake --build build/fw
 option(BRAIN_CPU_400MHZ "Run the core at 400 MHz from PLL1 (default: 64 MHz HSI)" OFF)
+option(BRAIN_ESP_USART6 "ESP32 link on USART6 (PG14 TX, PG9 RX) instead of USART1 (PB6 TX, PB7 RX)" OFF)
 option(BRAIN_CACHES "Enable the L1 instruction and data caches" OFF)
 
 set(CMAKE_C_STANDARD 11)
@@ -41,6 +42,9 @@ set_source_files_properties(${OUR_SOURCES} PROPERTIES COMPILE_OPTIONS
 
 if(BRAIN_CPU_400MHZ)
     target_compile_definitions(brain PRIVATE BRAIN_CPU_400MHZ)
+endif()
+if(BRAIN_ESP_USART6)
+    target_compile_definitions(brain PRIVATE BRAIN_ESP_USART6)
 endif()
 if(BRAIN_CACHES)
     target_compile_definitions(brain PRIVATE BRAIN_CACHES)

@@ -1,6 +1,7 @@
 /**
  * @file uart_port.c
- * @brief USART3 (ST-Link VCP) and USART6 (ESP32 link) driver. See uart_port.h.
+ * @brief USART3 (ST-Link VCP) and the ESP32 link driver (USART1 on PB6/PB7 by default, USART6 on
+ *        PG14/PG9 with BRAIN_ESP_USART6). See uart_port.h.
  */
 #include "uart_port.h"
 
@@ -9,11 +10,25 @@
 #define RX_RING_BYTES 256U /* power of two: indices wrap with a mask */
 #define RX_RING_MASK (RX_RING_BYTES - 1U)
 #define TX_WAIT_LOOPS 0x00FFFFFFU
-#define VCP_TX_PIN 8U  /* PD8 */
-#define VCP_RX_PIN 9U  /* PD9 */
-#define ESP_TX_PIN 14U /* PG14, Zio D1 */
-#define ESP_RX_PIN 9U  /* PG9, Zio D0 */
-#define UART_AF 7U     /* USART3 and USART6 are both AF7 on these pins */
+#define VCP_TX_PIN 8U /* PD8 */
+#define VCP_RX_PIN 9U /* PD9 */
+#ifdef BRAIN_ESP_USART6
+#define ESP_USART USART6
+#define ESP_IRQ USART6_IRQn
+#define ESP_GPIO GPIOG
+#define ESP_GPIO_CLK RCC_AHB4ENR_GPIOGEN
+#define ESP_TX_PIN 14U /* PG14 */
+#define ESP_RX_PIN 9U  /* PG9 */
+#else
+#define ESP_USART USART1
+#define ESP_IRQ USART1_IRQn
+#define ESP_GPIO GPIOB
+#define ESP_GPIO_CLK RCC_AHB4ENR_GPIOBEN
+#define ESP_TX_PIN 6U /* PB6, Arduino D1 on the Nucleo-H753ZI */
+#define ESP_RX_PIN 7U /* PB7, Arduino D0 */
+#endif
+#define UART_AF 7U /* USART1, USART3 and USART6 are all AF7 on the pins used here */
+#define AFR_PINS_PER_REG 8U
 #define MODER_AF 2U
 #define PIN_MODE_BITS 2U
 #define AFR_BITS 4U
@@ -36,7 +51,7 @@ typedef struct {
 
 static uart_dev_t g_dev[UART_COUNT] = {
     [UART_VCP] = {.regs = USART3},
-    [UART_ESP] = {.regs = USART6},
+    [UART_ESP] = {.regs = ESP_USART},
 };
 
 static void rx_isr(uart_dev_t *dev)
@@ -66,7 +81,11 @@ void USART3_IRQHandler(void)
     rx_isr(&g_dev[UART_VCP]);
 }
 
+#ifdef BRAIN_ESP_USART6
 void USART6_IRQHandler(void)
+#else
+void USART1_IRQHandler(void)
+#endif
 {
     rx_isr(&g_dev[UART_ESP]);
 }
@@ -76,11 +95,12 @@ static void pin_to_af(GPIO_TypeDef *port, uint32_t pin)
     const uint32_t shift = pin * PIN_MODE_BITS;
     port->MODER = (port->MODER & ~(3U << shift)) | (MODER_AF << shift);
     port->OSPEEDR = (port->OSPEEDR & ~(3U << shift)) | (OSPEEDR_HIGH << shift);
-    const uint32_t afr_shift = (pin - AFR_HIGH_FIRST_PIN) * AFR_BITS;
-    port->AFR[1] = (port->AFR[1] & ~(0xFU << afr_shift)) | (UART_AF << afr_shift);
+    const uint32_t reg = pin / AFR_PINS_PER_REG;
+    const uint32_t afr_shift = (pin % AFR_PINS_PER_REG) * AFR_BITS;
+    port->AFR[reg] = (port->AFR[reg] & ~(0xFU << afr_shift)) | (UART_AF << afr_shift);
 }
 
-/* Pins 8 and above only: both ports here use AFRH. Clocks and IRQ for the chosen port. */
+/* Clocks, pins and IRQ number for the chosen port. */
 static IRQn_Type enable_clocks_and_pins(uart_id_t id)
 {
     if (id == UART_VCP) {
@@ -91,12 +111,16 @@ static IRQn_Type enable_clocks_and_pins(uart_id_t id)
         pin_to_af(GPIOD, VCP_RX_PIN);
         return USART3_IRQn;
     }
-    RCC->AHB4ENR |= RCC_AHB4ENR_GPIOGEN;
+    RCC->AHB4ENR |= ESP_GPIO_CLK;
+#ifdef BRAIN_ESP_USART6
     RCC->APB2ENR |= RCC_APB2ENR_USART6EN;
+#else
+    RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
+#endif
     (void)RCC->APB2ENR;
-    pin_to_af(GPIOG, ESP_TX_PIN);
-    pin_to_af(GPIOG, ESP_RX_PIN);
-    return USART6_IRQn;
+    pin_to_af(ESP_GPIO, ESP_TX_PIN);
+    pin_to_af(ESP_GPIO, ESP_RX_PIN);
+    return ESP_IRQ;
 }
 
 bool uart_init(uart_id_t id, uint32_t baud, uint32_t pclk_hz)

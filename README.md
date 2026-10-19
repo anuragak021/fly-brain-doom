@@ -99,7 +99,7 @@ is for development only and is not connectome data.
 ## Firmware (Phase D)
 
 `firmware/src/main.c` serves the brain protocol on two UARTs at 115,200 baud: USART3 (the ST-Link
-virtual COM port, for the laptop) and USART6 (PG9 RX / PG14 TX, for the ESP32). Each port has its own
+virtual COM port, for the laptop) and USART1 (PB7 RX / PB6 TX, Arduino D0 / D1, for the ESP32). Each port has its own
 parser (`brain_link`), all share one neuron state, and a reply goes back on the port its request came
 from. Only one master should be stepping at a time. Logic lives in host-tested modules (`rate_model`, `brain_protocol`,
 `brain_server`); `firmware/port/` holds the thin register-level drivers (clock, GPIO, USART3
@@ -226,25 +226,26 @@ A STEP request is 17 bytes and its response 31 bytes: 48 bytes, 480 bits at 8N1,
 **4.2 ms at 115,200 baud** (0.5 ms at 921,600). This is arithmetic, not a measurement; it excludes
 the model step and driver latency. The default for the first bring-up is 115,200 baud.
 
-### Second UART for the ESP32 link (USART6, implemented; wiring and board test pending)
+### Second UART for the ESP32 link (USART1 on PB6/PB7, implemented; wiring and board test pending)
 
 USART3 (PD8/PD9) is the ST-Link virtual COM port to the laptop and stays that. The ESP32 link is
-**USART6 on PG9 (RX) and PG14 (TX), AF7**, 115,200 baud, APB2 kernel clock. The firmware serves both
-ports (flashed and checked on USART3 on 2026-10-20: the laptop path still passes). **USART6 itself
+**USART1 on PB7 (RX) and PB6 (TX), AF7**, 115,200 baud, APB2 kernel clock. The firmware serves both
+ports (flashed and checked on USART3 on 2026-10-20: the laptop path still passes). **USART1 itself
 has not been exercised on the board yet**: that needs the wires below and the ESP32.
 
 | Fact | Status |
 |---|---|
-| USART6_RX can be PG9; USART6_TX can be PG14; both AF7 | **verified** from ST's `STM32_open_pin_data` for STM32H753ZITx (2026-10-19) |
-| PG9 and PG14 are Nucleo-144 Zio D0 and D1 (CN9 pins 2 and 4) | **from memory of the Nucleo-144 board manual, not checked here**: read the D0 / D1 labels on CN9 before wiring |
+| PB6 can be USART1_TX and PB7 USART1_RX | **verified** from ST's `STM32_open_pin_data` for STM32H753ZITx (2026-10-20); AF7 from the datasheet's alternate function table |
+| PB7 is Arduino D0 and PB6 is Arduino D1 on this board | from Zephyr's `nucleo_h753zi/arduino_r3_connector.dtsi` (fetched 2026-10-20: D0 = PB7, D1 = PB6, D2 = PG14); **not yet confirmed on the physical board**. An earlier version of this README said PG9/PG14 = D0/D1: that was wrong for this board |
+| USART6 on PG14/PG9 | still available with `-DBRAIN_ESP_USART6=ON`; PG14 is D2 here and PG9 is not on the Arduino D0 to D15 pins |
 | No conflict with Ethernet RMII, USB, LEDs (PB0, PE1, PB14) or button PC13 | LEDs and button from secure-boot's notes; Ethernet and USB pin use **unverified** |
 
 Wiring (3.3 V logic both sides, common ground):
 
 | ESP32-S3 | Nucleo-H753ZI |
 |---|---|
-| GPIO17 (UART1 TX) | PG9 = D0 (RX) |
-| GPIO18 (UART1 RX) | PG14 = D1 (TX) |
+| GPIO17 (UART1 TX) | PB7 = D0 (RX) |
+| GPIO18 (UART1 RX) | PB6 = D1 (TX) |
 | GND | GND |
 
 ## Doom on the ESP32-S3 playing with the brain (`doom-nano/`)

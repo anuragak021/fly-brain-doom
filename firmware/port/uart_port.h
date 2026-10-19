@@ -1,7 +1,9 @@
 /**
  * @file uart_port.h
  * @brief Two UARTs, 8N1: the ST-Link virtual COM port (USART3, PD8 TX / PD9 RX, AF7) for the
- *        laptop, and the ESP32 link (USART6, PG14 TX / PG9 RX, AF7; Nucleo Zio D1 / D0).
+ *        laptop, and the ESP32 link (USART1, PB6 TX / PB7 RX, AF7; Arduino D1 / D0 on the
+ * Nucleo-H753ZI, taken from Zephyr's board description; build with -DBRAIN_ESP_USART6=ON for USART6
+ * on PG14 / PG9).
  *
  * RX is interrupt driven into one ring buffer per port; TX is polled. The ports are
  * independent: a byte on one never reaches the other.
@@ -16,7 +18,7 @@
 /** Which UART. */
 typedef enum {
     UART_VCP = 0, /**< USART3 on the ST-Link virtual COM port (APB1 kernel clock). */
-    UART_ESP = 1, /**< USART6 on PG9 / PG14 (APB2 kernel clock). */
+    UART_ESP = 1, /**< USART1 on PB6 / PB7, or USART6 (APB2 kernel clock). */
     UART_COUNT = 2
 } uart_id_t;
 

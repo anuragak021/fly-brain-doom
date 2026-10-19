@@ -1,7 +1,7 @@
 /**
  * @file main.c
  * @brief Brain firmware: serve the brain protocol on two UARTs, the ST-Link VCP (USART3, the
- *        laptop) and the ESP32 link (USART6), over one shared neuron state.
+ *        laptop) and the ESP32 link (USART1), over one shared neuron state.
  *
  * Main loop: each link's bytes go through its own protocol parser; each CRC-valid frame is
  * answered by the brain server on the link it arrived on. Only one master should be stepping at a

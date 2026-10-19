@@ -228,7 +228,7 @@ It is NOT connectome data and nothing built on it may be described as connectome
 - **Kills as score.** The engine's `killcount` restarts every level, so the HUD shows a counter that
   only grows (`ib_session_kills`). It replaced the armor field in the HUD, which the brain cannot
   make use of.
-- **Unverified on hardware:** USART6 on the Nucleo, the ESP32 link, frame rate with the brain
+- **Unverified on hardware:** the ESP32 link on the Nucleo (USART1 PB6/PB7, from a Zephyr board file, not yet traced on the board), frame rate with the brain
   attached. Features are not byte-identical to the ViZDoom ones (different luminance source, engine
   sprite map instead of labels), so the tuned constants (input gain, deadzone, turn sign) were not
   re-tuned for Doom and may need adjusting after a real run.
