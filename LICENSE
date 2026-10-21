@@ -20,13 +20,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
----------------------------------------------------------------------------
-This MIT license covers the code in this repository EXCEPT:
-
-* doom-nano/          GPL-2.0-or-later, because it contains and links the PrBoom
-                      Doom engine. See doom-nano/COPYING and doom-nano/THIRD_PARTY.md.
-* third_party/cmsis/  Arm CMSIS (Apache-2.0) and ST device headers, under their own
-                      terms in third_party/cmsis/LICENSE-*.txt.
-* connectome/data/    Derived from the Janelia MaleCNS connectome (neuPrint
-                      male-cns:v1.0), which Janelia publishes under CC-BY
-                      (male-cns.janelia.org). Attribution is in README.md.
