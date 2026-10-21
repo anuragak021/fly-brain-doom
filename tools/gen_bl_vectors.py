@@ -7,7 +7,7 @@ brain was developed against.
     python -m tools.gen_bl_vectors [--out doom-nano/host/tests/golden/bl_feature_vectors.txt]
 
 Line format:
-    CASE <w> <h> <a> <b> <n_rects> [<id> <class> <x0> <x1> <y0> <y1>]... | <f0> <f1> <f2> <f3> <visible> <offset>
+    CASE <w> <h> <a> <b> <n_rects> [<id> <class> <x0> <x1> <y0> <y1>]... | <f0> .. <f5> <visible> <offset>
 Gray pixel = (x * a + y * b) mod 256. Rectangles are painted in order into the id map (x1, y1
 inclusive); class 3 and 4 are live monsters, anything else is not.
 """

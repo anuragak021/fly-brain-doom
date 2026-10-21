@@ -155,8 +155,10 @@
  *
  *  DAMAGE_LEFT, DAMAGE_RIGHT : where the last attacker is, felt only while the player is in
  *      pain. Let a be the attacker's direction relative to the view, in degrees, positive to
- *      the LEFT (Doom's angle convention), -180..180, and p = pain in 0..1 (Doom's
- *      damagecount / 100, which fades by one per tic). With s = clamp(a / 90, -1, 1):
+ *      the LEFT (Doom's angle convention), -180..180, and p = pain in 0..1:
+ *      p = min(damagecount / 25, 1), with Doom's player damagecount (the damage just taken,
+ *      fading by one per tic). The scale 25 makes a typical 10-point hit p = 0.4; with /100 the
+ *      model ignored hits below about 15 points (README: Learning). With s = clamp(a / 90, -1, 1):
  *          DAMAGE_LEFT = p * max(s, 0)      DAMAGE_RIGHT = p * max(-s, 0)
  *      An attacker behind the player counts fully to its side. No attacker (or not in pain):
  *      both 0. ViZDoom senders leave both at 0.
@@ -308,7 +310,7 @@ brain_status_t brain_step_resp_decode(const uint8_t *payload, size_t len, brain_
  *  - The master (ESP32 or laptop) sends one request and waits for its response before
  *    sending the next. The brain never sends unsolicited frames.
  *  - The response carries the request's SEQ. The master should time out (suggested
- *    100 ms or more for STEP: the model step takes 27 ms at 64 MHz) and then count a miss; a late
+ *    100 ms or more for STEP: the model step takes about 21 ms at 64 MHz, 22 ms with learning) and then count a miss; a late
  * response with a stale SEQ is ignored.
  *  - A frame with a bad CRC or LEN > BRAIN_MAX_PAYLOAD_BYTES is dropped with no reply
  *    (its SEQ cannot be trusted). A frame with a valid CRC that is invalid in content gets
