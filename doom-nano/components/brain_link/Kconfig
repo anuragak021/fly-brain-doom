@@ -1,0 +1,59 @@
+menu "doom-esp32 brain link"
+
+    config DOOM_BRAIN_PLAY
+        bool "Let the STM32 brain play (start a real game instead of the attract demos)"
+        default y
+        help
+            Starts E1M1 directly and drives the player from the brain's replies. Without the
+            brain connected the player stands still. Turn off to get the attract demos back.
+
+    config DOOM_BRAIN_MAP
+        int "Episode 1 map to start on (E1M<n>)"
+        range 1 9
+        default 2
+        depends on DOOM_BRAIN_PLAY
+        help
+            E1M1's start room is empty (its nearest monster is about 1700 map units away), and
+            the player only reacts to what is on screen. E1M2 at skill 3 has 11 monsters
+            within 1000 units of the start.
+
+    config DOOM_BRAIN_SKILL
+        int "Skill level (1 easiest .. 5 hardest)"
+        range 1 5
+        default 3
+        depends on DOOM_BRAIN_PLAY
+
+    config DOOM_BRAIN_LEARN
+        bool "Let the brain learn while playing (reward-modulated plasticity on the STM32)"
+        default y
+        depends on DOOM_BRAIN_PLAY
+        help
+            Sends BRAIN_STEP_FLAG_LEARN with a reward: +1 per monster the player kills, minus
+            health lost / 100. Only while the player is alive in a level. The STM32 keeps the
+            learned weights in RAM until it is reset or power cycled. Off: the connectome
+            weights (or whatever the STM32 learned before) are used unchanged.
+
+    config DOOM_BRAIN_RESET_WEIGHTS_ON_BOOT
+        bool "Return the brain to the connectome weights when the ESP32 boots"
+        default n
+        depends on DOOM_BRAIN_PLAY
+        help
+            Sends BRAIN_STEP_FLAG_RESET_WEIGHTS once, with the first STEP after boot. Off: what
+            the brain learned survives an ESP32 reboot as long as the STM32 stays powered.
+
+    config DOOM_BRAIN_TX_GPIO
+        int "ESP32 TX GPIO (to STM32 PB7 / Nucleo D0)"
+        default 17
+        help
+            GPIO17 and 18 are free on the ESP32-S3 N16R8 (not flash, PSRAM, USB, UART0, strapping
+            or the OLED's GPIO8/9).
+
+    config DOOM_BRAIN_RX_GPIO
+        int "ESP32 RX GPIO (from STM32 PB6 / Nucleo D1)"
+        default 18
+
+    config DOOM_BRAIN_BAUD
+        int "Link baud rate"
+        default 115200
+
+endmenu

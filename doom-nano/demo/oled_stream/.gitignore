@@ -1,0 +1,5 @@
+build/
+sdkconfig
+sdkconfig.old
+build_921k/
+sdkconfig.921k

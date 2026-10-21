@@ -1,0 +1,7 @@
+# doom-esp32 partition table, 16 MB flash. The WAD partition is read in place through
+# esp_partition_mmap, so its offset is 64 KB aligned (MMU page). Sizes: see NOTES.md, "Phase 2".
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x6000
+phy_init, data, phy,     0xf000,   0x1000
+factory,  app,  factory, 0x10000,  0x200000
+wad,      data, 0x40,    0x210000, 0x600000

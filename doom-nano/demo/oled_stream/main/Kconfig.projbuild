@@ -1,0 +1,23 @@
+menu "OLED stream demo"
+
+choice DEMO_TRANSPORT
+    prompt "Link to the laptop"
+    default DEMO_TRANSPORT_UART
+    help
+        Which connector carries the binary demo stream. Logs are disabled on that link.
+
+config DEMO_TRANSPORT_UART
+    bool "UART0 through the board's USB-UART bridge (COM connector)"
+
+config DEMO_TRANSPORT_USB_JTAG
+    bool "Native USB Serial/JTAG (USB connector)"
+
+endchoice
+
+config DEMO_UART_BAUD
+    int "UART0 baud rate"
+    depends on DEMO_TRANSPORT_UART
+    default 2000000
+    range 115200 5000000
+
+endmenu

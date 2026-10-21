@@ -1,0 +1,3 @@
+# Overlay: demo link at 921600 baud (fallback if 2 Mbaud is unreliable).
+# idf.py -B build_921k -D SDKCONFIG=sdkconfig.921k -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.921k" build
+CONFIG_DEMO_UART_BAUD=921600

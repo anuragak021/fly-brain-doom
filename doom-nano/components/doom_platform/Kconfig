@@ -1,0 +1,18 @@
+menu "doom-esp32 OLED"
+
+    choice DOOM_OLED_STYLE
+        prompt "Display style while playing"
+        default DOOM_OLED_STYLE_NANO
+        help
+            How the 3D view is drawn on the 128x64 panel. Title, menus, the automap and screen
+            wipes always use the outline style. See NOTES.md for the comparison.
+
+        config DOOM_OLED_STYLE_NANO
+            bool "nano: flat shaded walls, black floors, crisp sprites, HUD line"
+        config DOOM_OLED_STYLE_LAYERS
+            bool "layers: dim scene, bright haloed sprites"
+        config DOOM_OLED_STYLE_OUTLINE
+            bool "outline: dimmed dither plus edges (no engine masks)"
+    endchoice
+
+endmenu

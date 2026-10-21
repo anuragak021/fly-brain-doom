@@ -1,0 +1,38 @@
+# ESP-IDF build output
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Host build output
+host/build/
+*.o
+*.a
+
+# Doom data: never commit a WAD (copyright / size)
+*.wad
+*.WAD
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Editors
+.vscode/
+.idea/
+
+# Editor index (symlink to host build)
+compile_commands.json
+.cache/
+
+# Captured ViZDoom frames (regenerate with host/stream/capture_frames.py)
+host/captures/
+
+# ViZDoom runtime files written into the working directory
+_vizdoom/
+_vizdoom.ini
+
+# Local WADs for flashing (never committed)
+wad/

@@ -1,0 +1,2 @@
+# Third party engine: store byte-exact as upstream (some files use CRLF)
+components/prboom/** -text

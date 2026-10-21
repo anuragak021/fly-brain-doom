@@ -1,0 +1,27 @@
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# 8 MB octal PSRAM (in package, ESP32-S3R8); the engine's zone and caches live there.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+# Lets EXT_RAM_BSS_ATTR place static buffers (the sprite mask copy) in PSRAM.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# Measured numbers are taken at 240 MHz with -O2 (IDF defaults are 160 MHz and -Og).
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# The engine runs on the main task. Its BSP traversal recurses; give it room.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+# 1 ms ticks so I_uSleep has millisecond resolution.
+CONFIG_FREERTOS_HZ=1000
+# The engine loop never blocks, so the CPU0 idle task cannot run; do not watch it. The engine
+# task is watched instead (esp_task_wdt_add in doom_platform_run, fed every frame).
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
+
+# Logs (engine messages, frame timing) on UART0 at 115200: the COM connector.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
