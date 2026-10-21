@@ -11,21 +11,26 @@ not a simulation of a fly brain.
 | A: extract subgraph (Python) | done |
 | B: rate model + ViZDoom loop, Python backend | done |
 | C: CSR export to C + host test vs Python | done |
-| Brain protocol v1 (header, C + Python implementations, known-answer vectors) | done, host-tested only |
-| D: STM32 firmware + `--backend stm32` | flashed to the Nucleo-H753ZI (2026-10-20) and checked with `tools.hw_check`: board matches the Python model, step time measured (below). The `game.play --backend stm32` run and a demo video are still to do |
+| Brain protocol v2 (header, C + Python implementations, known-answer vectors) | done, host-tested and run on the boards |
+| D: STM32 firmware + `--backend stm32` | flashed to the Nucleo-H753ZI and checked with `tools.hw_check`: board matches the Python model, step time measured (below). The `game.play --backend stm32` run and a demo video are still to do |
+| E: Doom on the ESP32-S3 driven by the board (`doom-nano/`) | runs on the real boards (below) |
+| F: damage input, on-board reward-modulated plasticity, map memory | runs on the boards; no evidence yet that learning plays better (below) |
 
-**Measured on the STM32H753ZI** (`python -m tools.hw_check`, 300 random Q15 feature frames, core at the
-default 64 MHz HSI, no PLL, caches off, USART3 on the ST-Link VCP at 115200):
+**Measured on the STM32H753ZI** (`python -m tools.hw_check`, protocol v2, 300 random Q15 feature frames,
+core at the default 64 MHz HSI, no PLL, caches off, USART3 on the ST-Link VCP at 115200):
 
 | What | Value |
 |---|---|
-| board vs Python model, largest activity difference | 3.7e-8 (0 of 1,200 values outside tolerance) |
+| board vs Python model, largest activity difference | 2.98e-8 (0 values outside tolerance) |
 | turn actions that disagree with the Python rule | 0 of 300 |
 | link misses (timeouts / retries) | 0 |
-| model step on the board (DWT cycle counter) | mean 27.27 ms (min 27.23, max 27.32), 1,745,267 cycles |
-| STEP round trip as seen by the laptop (USB serial included) | mean 31.3 ms, p95 32.8 ms, max 52.8 ms |
+| model step on the board (DWT cycle counter) | 21.3 ms; 22.2 ms with learning on (100 frames) |
+| STEP round trip as seen by the laptop (USB serial included) | mean 26.6 ms |
 
-The step is slow at 64 MHz: the loop can make about 30 decisions per second. The 400 MHz PLL and
+The v1 firmware measured 27.27 ms per step. The drop to 21.3 ms came with v2, which reads the
+weights from a RAM copy in DTCM instead of flash; that this is the cause is inferred, not A/B tested.
+
+The step is slow at 64 MHz: the loop can make about 35 to 38 decisions per second. The 400 MHz PLL and
 caches build option exists but has not been run on the board. No demo video yet. Everything
 labelled "host" below was measured on the laptop or in the host simulator.
 
@@ -114,11 +119,11 @@ backend. It is tested without hardware against `tests/c/brain_sim.c`, which runs
 server and model behind pipes: 80 random frames over the wire matched the Python model within 1e-4
 and gave identical turn actions.
 
-## Brain protocol (v1)
+## Brain protocol (v2)
 
 Owner: this repository. The normative definition is
 [`firmware/include/brain_protocol.h`](firmware/include/brain_protocol.h); this section explains it.
-doom-esp32 (the ESP32-S3 Doom game) and the laptop `--backend stm32` client are masters of this
+The ESP32-S3 Doom game (`doom-nano/`) and the laptop `--backend stm32` client are masters of this
 link. They must match the header exactly and never redefine it. Reference implementations:
 C in `firmware/src/brain_protocol.c`, Python in `game/brain_protocol.py`. Known-answer vectors
 (hex frames, CRC check, Q15 examples) are in `tests/golden/protocol_vectors.txt`; both C and Python
@@ -130,7 +135,7 @@ tests consume that file, and other projects can read it to check their bytes.
  off  0     1        2      3     4     5 .. 4+LEN      5+LEN .. 8+LEN
     +-----+--------+------+-----+-----+---------------+------------------+
     | SOF | VERSION| TYPE | SEQ | LEN |    PAYLOAD    |  CRC32 (u32 LE)  |
-    |0xA5 |  0x01  |      |     |     |    LEN bytes  |                  |
+    |0xA5 |  0x02  |      |     |     |    LEN bytes  |                  |
     +-----+--------+------+-----+-----+---------------+------------------+
                     '----------- CRC covers bytes 1 .. 4+LEN ----------'
 ```
@@ -138,7 +143,7 @@ tests consume that file, and other projects can read it to check their bytes.
 * All multi-byte integers are **little-endian**. Floats are IEEE-754 binary32, sent as the
   little-endian bytes of the 32-bit pattern.
 * `LEN` counts the **payload only** (0 to 32). Frame size is `9 + LEN` bytes, at most 41.
-* `SEQ` is chosen by the master and echoed by the brain. `VERSION` is in every frame (currently 1).
+* `SEQ` is chosen by the master and echoed by the brain. `VERSION` is in every frame (currently 2; a v1 frame gets error 3).
 * **CRC**: standard CRC-32 (zlib / IEEE 802.3): reflected polynomial `0xEDB88320`, init
   `0xFFFFFFFF`, input and output reflected, final XOR `0xFFFFFFFF`. Check value
   `CRC-32("123456789") = 0xCBF43926`. This is the same CRC as secure-boot's `crc32.c`, Python's
@@ -151,23 +156,30 @@ tests consume that file, and other projects can read it to check their bytes.
 | TYPE | Name | Direction | Payload |
 |---|---|---|---|
 | `0x01` | PING | master to brain | empty |
-| `0x81` | INFO | brain to master | 9 bytes: `u8` protocol version, `u8` feature count (4), `u16` neurons, `u8` substeps per STEP, `u32` core clock in kHz |
-| `0x02` | STEP | master to brain | 8 bytes: 4 x `i16` Q15 features |
-| `0x82` | STEP response | brain to master | 22 bytes: `u8` actions, `u8` reserved (0), `u32` step cycles, 4 x `f32` activities |
+| `0x81` | INFO | brain to master | 11 bytes: `u8` protocol version, `u8` feature count (6), `u16` neurons, `u8` substeps per STEP, `u32` core clock in kHz, `u16` learnable synapses |
+| `0x02` | STEP | master to brain | 15 bytes: 6 x `i16` Q15 features, `i16` Q15 signed reward, `u8` flags |
+| `0x82` | STEP response | brain to master | 26 bytes: `u8` actions, `u8` reserved (0), `u32` step cycles, 4 x `f32` activities, `f32` weight drift |
 | `0x03` | RESET | master to brain | empty |
 | `0x83` | RESET response | brain to master | empty |
 | `0xFF` | ERROR | brain to master | 2 bytes: `u8` code, `u8` offending request TYPE |
 
 STEP response layout (byte offsets in the payload): `0` actions, `1` reserved, `2..5` step cycles
 (core clock cycles spent in the model step, DWT; the clock is reported in INFO), `6..9` steer left,
-`10..13` steer right, `14..17` forward, `18..21` backward (mean activity of each output group).
+`10..13` steer right, `14..17` forward, `18..21` backward (mean activity of each output group),
+`22..25` weight drift (relative L2 change of the learning weights from their connectome values).
 
-Error codes: `1` unknown type, `2` bad length, `3` bad version, `4` bad feature (negative Q15).
+STEP request layout: `0..11` the six features, `12..13` reward (signed Q15, -1..+1, `-32768` is
+rejected), `14` flags: bit 0 `LEARN` (apply the plasticity rule on this step), bit 1
+`RESET_WEIGHTS` (restore the connectome weights before the step); bits 2 to 7 are reserved and
+ignored.
+
+Error codes: `1` unknown type, `2` bad length, `3` bad version, `4` bad feature (negative Q15
+feature, or reward `-32768`).
 
 ### Features (the part most likely to be gotten silently wrong)
 
-Four features, each a real number in 0..1, in this order: `LUM_LEFT, LUM_RIGHT, ENEMY_LEFT,
-ENEMY_RIGHT`. A wrong but plausible value still steers the controller, so nothing will error out;
+Six features, each a real number in 0..1, in this order: `LUM_LEFT, LUM_RIGHT, ENEMY_LEFT,
+ENEMY_RIGHT, DAMAGE_LEFT, DAMAGE_RIGHT`. A wrong but plausible value still steers the controller, so nothing will error out;
 match these definitions carefully.
 
 * **Q15 encoding:** `q = floor(f * 32767 + 0.5)`, clamped by the sender to 0..32767. The real value
@@ -189,11 +201,17 @@ match these definitions carefully.
     labels buffer never includes hidden enemies, while an engine object list does.
   * In ViZDoom the position is taken from the labels buffer, which is game-engine ground truth and
     not vision. The same simplification applies on the ESP32.
+* **Damage:** which side the last hit came from. With `a` the attacker's direction relative to the
+  view in degrees (positive = left) and `p = min(damagecount / 25, 1)` the engine's pain counter,
+  `s = clamp(a / 90, -1, 1)`, `DAMAGE_LEFT = p * max(s, 0)`, `DAMAGE_RIGHT = p * max(-s, 0)`. An
+  attacker exactly behind counts as right. The scale 25 (not 100) was chosen because in the
+  simulator pulses below about 0.15 never turned the model.
+* **Reward** (not a feature, a separate field): on the ESP32 +1 per kill by the player and -0.01
+  per health point lost, summed between STEPs and clamped to -1..+1.
 
 ### Actions
 
-Bit `0` = turn left, bit `1` = turn right (mutually exclusive). Bits 2 to 7 are reserved and zero
-in v1. **Fire is not a brain bit**: the game side decides it with its own heuristic. Forward and
+Bit `0` = turn left, bit `1` = turn right (mutually exclusive). Bits 2 to 7 are reserved and zero. **Fire is not a brain bit**: the game side decides it with its own heuristic. Forward and
 backward activities are returned as numbers only because there is no decoding rule or test for
 them yet.
 
@@ -207,7 +225,7 @@ host can check the STM32's decode against the Python one.
 
 * One **master** at a time (ESP32 or laptop), one request outstanding. The brain never sends
   unsolicited frames. The response echoes `SEQ`.
-* The master should time out (at least 100 ms for STEP: the model step alone takes 27 ms at the default 64 MHz clock, measured), count a miss, and ignore a late response
+* The master should time out (at least 100 ms for STEP: the model step alone takes about 21 ms at the default 64 MHz clock, 22 ms with learning, measured), count a miss, and ignore a late response
   with a stale `SEQ`.
 * A frame with a **bad CRC** or `LEN > 32` is dropped silently, with no reply, because its `SEQ`
   cannot be trusted. A frame with a **valid CRC but invalid content** (unknown type, wrong `LEN`
@@ -215,28 +233,28 @@ host can check the STM32's decode against the Python one.
 * Resynchronisation: after a bad frame the parser moves **one byte past the false `SOF`** and
   rescans (it does not skip `LEN` bytes). `SOF` can appear inside a payload; the CRC settles it.
 * A receiver resets its parser if no byte arrives for 20 ms (`BRAIN_INTERBYTE_TIMEOUT_MS`).
-* RESET zeroes the neuron state. The resting reference used for decoding is a model constant and
-  is not changed by RESET.
+* RESET zeroes the neuron state. It does not restore learned weights (that is the STEP flag
+  `RESET_WEIGHTS`). Learned weights live in RAM only and are lost at power off.
 * Only **one master may drive the model at a time**. The brain does not arbitrate between the two
   UARTs; if both are active their STEPs would interleave on the same state.
 
 ### Computed wire time (not measured)
 
-A STEP request is 17 bytes and its response 31 bytes: 48 bytes, 480 bits at 8N1, which is
-**4.2 ms at 115,200 baud** (0.5 ms at 921,600). This is arithmetic, not a measurement; it excludes
+A STEP request is 24 bytes and its response 35 bytes: 59 bytes, 590 bits at 8N1, which is
+**5.1 ms at 115,200 baud** (0.6 ms at 921,600). This is arithmetic, not a measurement; it excludes
 the model step and driver latency. The default for the first bring-up is 115,200 baud.
 
-### Second UART for the ESP32 link (USART1 on PB6/PB7, implemented; wiring and board test pending)
+### Second UART for the ESP32 link (USART1 on PB6/PB7)
 
 USART3 (PD8/PD9) is the ST-Link virtual COM port to the laptop and stays that. The ESP32 link is
 **USART1 on PB7 (RX) and PB6 (TX), AF7**, 115,200 baud, APB2 kernel clock. The firmware serves both
-ports (flashed and checked on USART3 on 2026-10-20: the laptop path still passes). **USART1 itself
-has not been exercised on the board yet**: that needs the wires below and the ESP32.
+ports. USART1 has been run on the board with the ESP32-S3 wired as below (results in the next
+section).
 
 | Fact | Status |
 |---|---|
-| PB6 can be USART1_TX and PB7 USART1_RX | **verified** from ST's `STM32_open_pin_data` for STM32H753ZITx (2026-10-20); AF7 from the datasheet's alternate function table |
-| PB7 is Arduino D0 and PB6 is Arduino D1 on this board | from Zephyr's `nucleo_h753zi/arduino_r3_connector.dtsi` (fetched 2026-10-20: D0 = PB7, D1 = PB6, D2 = PG14); **not yet confirmed on the physical board**. An earlier version of this README said PG9/PG14 = D0/D1: that was wrong for this board |
+| PB6 can be USART1_TX and PB7 USART1_RX | **verified** from ST's `STM32_open_pin_data` for STM32H753ZITx (2026-10-20); AF7 from the datasheet's alternate function table; the link works on the board |
+| PB7 is Arduino D0 and PB6 is Arduino D1 on this board | from Zephyr's `nucleo_h753zi/arduino_r3_connector.dtsi` (fetched 2026-10-20: D0 = PB7, D1 = PB6, D2 = PG14); confirmed by the working ESP32 link on these pins. An earlier version of this README said PG9/PG14 = D0/D1: that was wrong for this board |
 | USART6 on PG14/PG9 | still available with `-DBRAIN_ESP_USART6=ON`; PG14 is D2 here and PG9 is not on the Arduino D0 to D15 pins |
 | No conflict with Ethernet RMII, USB, LEDs (PB0, PE1, PB14) or button PC13 | LEDs and button from secure-boot's notes; Ethernet and USB pin use **unverified** |
 
@@ -255,17 +273,18 @@ ESP32-S3, 128x64 OLED, the "nano" look), with the brain link added. It is **GPL-
 `doom-nano/COPYING` and `THIRD_PARTY.md`); the rest of this repository is separate from it. What
 was added here (`doom-nano/components/brain_link`, `components/doom_platform/i_brain_input.c`):
 
-* **Features** (`bl_features.c`): the same four numbers as `game/features.py` (left and right
-  luminance, enemy left and right), tested against vectors that Python generates
+* **Features** (`bl_features.c`): the same six numbers as `game/features.py` (left and right
+  luminance, enemy left and right, damage left and right), tested against vectors that Python generates
   (`tools/gen_bl_vectors.py`). Differences from the ViZDoom version: luminance comes from the
   128x56 gray view shown on the OLED (after the display pipeline's black and white levels); the
   enemy is the largest live monster in the engine's sprite id map (engine ground truth, not
-  vision).
+  vision). Damage direction comes from the engine's `player->attacker` while `damagecount > 0`.
 * **Link task** (`bl_client.c`, UART1 on core 1): sends STEP continuously with the latest features
   and publishes the latest reply. The engine never waits for the brain.
 * **Controls** (`bl_policy.c`, `i_brain_input.c`). **While a monster is on screen, only the
   connectome turns the player** (the board's action bits become left/right arrow key events; no
-  heuristic can override them). With no monster on screen the connectome's outputs mostly stay in
+  heuristic can override them). Next, while the player is being hit (a damage feature of at least
+  0.1) and the connectome turns, its turn is used. Otherwise the connectome's outputs mostly stay in
   the dead zone, so the player is moved by **heuristics, not the connectome**, in this priority:
   1. unstick: forward walking made no progress for 1 s of game time (35 tics): back up, turn about
      150 degrees and press use (doors); stuck again within 3 s turns the same way again;
@@ -274,14 +293,22 @@ was added here (`doom-nano/components/brain_link`, `components/doom_platform/i_b
      (Doom's use reaches only 64 map units, and wall avoidance turns away long before that, so
      without this the player never opened E1M3's start door);
   4. wall avoidance: the centre quarter of the view is at least 55 % wall (from the display
-     pipeline's wall coverage map): turn toward the half with less wall;
+     pipeline's wall coverage map): turn toward the side the map memory says is less visited if
+     it gives a clear answer, otherwise toward the half with less wall;
   5. otherwise the connectome's action bits.
   Also heuristic: fire when a monster is within 0.15 of the screen centre; walk forward whenever
   not aiming; press use to respawn and to dismiss intermission screens. **Level exit is a
   shortcut, not play**: the player cannot find the exit switch, so once every monster on the
   level is dead (the engine's `totallive`), the firmware ends the level 3 s later with
   `G_ExitLevel()` and the next map starts. Every turning tic is
-  logged by source (brain, unstick, scan, wall).
+  logged by source (brain, pain, unstick, scan, wall, explore).
+* **Map memory** (`bl_map.c`, a **heuristic** on the ESP32, not learned by the brain): a grid of
+  128 x 128 map unit cells over the level's blockmap, kept in PSRAM for one map (it survives deaths
+  and is cleared when a new map loads). It counts the tics spent in each cell, and remembers door
+  probes that failed by cell and heading octant so the same plain wall is not probed again. A probe
+  passes if the player gets 48 map units along its heading within 70 tics. Wall turns prefer the
+  side whose cells 1 to 3 away along rays 60 degrees left and right were visited less (at least
+  70 tics and 1.5 times fewer).
 * **Score**: the OLED's bottom line shows health, **kills** (skull icon, summed over lives and
   levels) and ammo. The armor field was replaced. Only kills made by the player count: in single
   player PrBoom also credits monsters killed by other monsters or barrels to the player, so a
@@ -293,10 +320,10 @@ was added here (`doom-nano/components/brain_link`, `components/doom_platform/i_b
   the player stands still. The start map is a menuconfig option (`DOOM_BRAIN_MAP`, default 2);
   the board currently runs E1M3.
 
-Status: builds with ESP-IDF 5.5.2 (`-Werror`), 12 host test suites pass (feature vectors,
-policy, HUD), and **it runs on the real boards** (2026-10-20, ESP32-S3 N16R8 wired to the Nucleo
+Status: builds with ESP-IDF 5.5.2 (`-Werror`), 13 host test suites pass (feature vectors,
+policy, map memory, HUD), and **it runs on the real boards** (2026-10-20, ESP32-S3 N16R8 wired to the Nucleo
 on D0/D1, 115,200 baud, STM32 at 64 MHz). Observed in one run of about 4 minutes, read from the
-ESP32 console log:
+ESP32 console log (protocol v1 firmware at the time):
 
 | What | Value |
 |---|---|
@@ -331,8 +358,44 @@ the start room's door and went on to the next rooms (logged y from -3,374 to -2,
 the player, 0 deaths, 69 of 74 monsters still alive; turning tics: connectome 102, wall 784, unstick
 429, scan 408; 601 tics probing. The auto exit has not fired on the board yet (no level cleared).
 
+### Learning on the board (protocol v2)
+
+The ESP32 sends a reward with every STEP and sets `LEARN` while the player is alive in a level.
+The STM32 then applies a three-factor rule (`firmware/src/plasticity.c`, Python reference
+`model/plasticity.py`) to the **320 synapses into the 4 steering neurons**: an eligibility trace
+of pre x post activity (decay 0.967 per step) times the reward minus its running mean (rate
+0.001), learning rate 0.2, a slow pull back toward the connectome weight (0.0002), Dale's law
+(a synapse never changes sign), |w| at most 2 x its connectome value, and row scaling so a
+neuron's total input never exceeds the original. The learned weights are a RAM copy in DTCM; they
+are not saved to flash. C and Python agree on golden runs (`ctest`, abs 1e-4 / rel 1e-3).
+
+Measured: board step 21.2 ms with learning off and 22.1 ms with it on (over the ESP32 link);
+ESP32 round trip 28 to 29 ms. Two runs of 150 s on E1M3 skill 3, weights reset first (one run
+each, N = 1):
+
+| Run | Kills by the player | Deaths | Weight drift at the end |
+|---|---|---|---|
+| learning on | 10 | 2 | 0.18 |
+| learning off | 10 | 2 | 0 |
+| learning on + map memory | 6 | 5 | 0.068 |
+
+In the map memory run, 15 door probes passed and 12 failed, and 68 probe tics were skipped at
+walls already known to be plain. **There is no evidence yet that learning plays better**: the
+runs are single, short, and equal in kills. Longer repeated runs are on the roadmap.
+
+## License and credits
+
+* Code written for this project: **MIT** (`LICENSE`).
+* `doom-nano/`: **GPL-2.0-or-later**, because it contains and links the PrBoom Doom engine
+  (`doom-nano/COPYING`, credits in `doom-nano/THIRD_PARTY.md`). The original files written for it
+  are listed there. No WAD is included.
+* `third_party/cmsis/`: Arm CMSIS and ST device headers under their own licenses
+  (`third_party/cmsis/LICENSE-*.txt`).
+* Connectome data: the Drosophila male CNS connectome (MaleCNS, neuPrint `male-cns:v1.0`) from
+  Janelia Research Campus, published under CC-BY (https://male-cns.janelia.org).
+  `connectome/data/` is a subgraph derived from it by `connectome/extract.py`.
+
 ## Roadmap
 
-STM32 brain firmware with a framed UART protocol and DWT step timing (Phase D); Doom on an ESP32-S3
-with OLED; COBS/CRC reuse from the secure-boot project; GPU simulation of a larger network;
+Longer repeated learning on/off runs with a baseline; saving learned weights to flash; COBS/CRC reuse from the secure-boot project; GPU simulation of a larger network;
 fixed point + CMSIS-DSP; spiking variant; delivery through the secure bootloader. See `NOTES.md`.
