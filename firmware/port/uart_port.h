@@ -49,6 +49,14 @@ bool uart_read_byte(uart_id_t id, uint8_t *byte);
  */
 bool uart_write(uart_id_t id, const uint8_t *data, size_t len);
 
+/**
+ * @brief Send one byte only if the transmitter is free right now. Never blocks.
+ * @param[in] id    Which port.
+ * @param[in] byte  Byte to send.
+ * @return true if the byte was queued, false if the transmitter was busy or the id is bad.
+ */
+bool uart_try_write_byte(uart_id_t id, uint8_t byte);
+
 /** @return Bytes dropped so far on that port (ring full or overrun/framing/noise error). */
 uint32_t uart_drop_count(uart_id_t id);
 

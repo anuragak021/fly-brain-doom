@@ -186,6 +186,19 @@ bool uart_write(uart_id_t id, const uint8_t *data, size_t len)
     return guard != 0U;
 }
 
+bool uart_try_write_byte(uart_id_t id, uint8_t byte)
+{
+    if ((uint32_t)id >= (uint32_t)UART_COUNT) {
+        return false;
+    }
+    USART_TypeDef *u = g_dev[id].regs;
+    if ((u->ISR & USART_ISR_TXE_TXFNF) == 0U) {
+        return false;
+    }
+    u->TDR = byte;
+    return true;
+}
+
 uint32_t uart_drop_count(uart_id_t id)
 {
     return ((uint32_t)id < (uint32_t)UART_COUNT) ? g_dev[id].drops : 0U;

@@ -19,11 +19,22 @@
 /** Returns a free-running 32-bit cycle counter (wraps; differences are taken unsigned). */
 typedef uint32_t (*brain_cycle_fn_t)(void);
 
+/** The most recent successful STEP, kept so the firmware can show what the brain is doing. */
+typedef struct {
+    uint32_t step_count;                /**< Successful STEPs since reset. */
+    uint32_t step_errors;               /**< STEPs answered with an error frame. */
+    float features[BRAIN_N_FEATURES];   /**< Request features, 0..1. */
+    float reward;                       /**< Request reward, -1..+1. */
+    uint8_t flags;                      /**< Request BRAIN_STEP_FLAG_*. */
+    brain_step_resp_t resp;             /**< What was answered. */
+} brain_last_step_t;
+
 /** Server state: neuron activities, learning state and the platform hooks. Large (about
  *  35 KB, mostly the RAM copy of the weights): keep one static instance. */
 typedef struct {
     rm_state_t model;
     pl_state_t learn;
+    brain_last_step_t last;
     uint32_t core_clock_khz;
     brain_cycle_fn_t cycles;
 } brain_server_t;

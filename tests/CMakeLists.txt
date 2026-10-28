@@ -52,6 +52,12 @@ add_executable(test_brain_link
 target_include_directories(test_brain_link PRIVATE ${FW}/src ${FW}/include ${FW}/generated)
 target_link_libraries(test_brain_link PRIVATE m)
 
+add_executable(test_telemetry
+    c/test_telemetry.c
+    ${FW}/src/telemetry.c)
+target_include_directories(test_telemetry PRIVATE ${FW}/src ${FW}/include ${FW}/generated)
+target_link_libraries(test_telemetry PRIVATE m)
+
 enable_testing()
 add_test(NAME rate_model_vs_python
          COMMAND test_rate_model ${CMAKE_CURRENT_SOURCE_DIR}/golden/rate_golden.csv)
@@ -61,3 +67,4 @@ add_test(NAME brain_protocol_vectors
          COMMAND test_brain_protocol ${CMAKE_CURRENT_SOURCE_DIR}/golden/protocol_vectors.txt)
 add_test(NAME brain_server COMMAND test_brain_server)
 add_test(NAME brain_link COMMAND test_brain_link)
+add_test(NAME telemetry COMMAND test_telemetry)
