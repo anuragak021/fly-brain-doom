@@ -4,12 +4,15 @@
  */
 #include "oled_ssd1306.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "driver/i2c_master.h"
 
 #define I2C_TIMEOUT_MS (100)
 #define I2C_GLITCH_FILTER_CYCLES (7U)
+#define WAKE_ADDR (0x03U) /* first address the debug sweep probed */
+#define WAKE_PROBE_TIMEOUT_MS (50)
 #define CTRL_CMD_STREAM (0x00U)
 #define CTRL_DATA_STREAM (0x40U)
 
@@ -49,6 +52,21 @@ static const uint8_t INIT_SEQ[] = {
 static const uint8_t WINDOW_SEQ[] = {CTRL_CMD_STREAM, 0x21U, 0x00U, 0x7FU, 0x22U, 0x00U, 0x07U};
 
 static const uint8_t DATA_CTRL = CTRL_DATA_STREAM;
+
+/* Measured on the home board (SSD1306 module, ESP32-S3): after an ESP32 reset the first probe of
+ * 0x3C failed on every boot, while probing 0x03..0x3B and then 0x3C succeeded. Probing only the
+ * neighbouring addresses, or retrying 0x3C alone for 2 s, did not help. The cause is not
+ * understood; the sweep is an empirical workaround, about 57 short probes. */
+static bool probe_with_wakeup(uint8_t addr)
+{
+    if (i2c_master_probe(s_bus, addr, I2C_TIMEOUT_MS) == ESP_OK) {
+        return true;
+    }
+    for (uint32_t a = WAKE_ADDR; a < addr; a++) {
+        (void)i2c_master_probe(s_bus, (uint16_t)a, WAKE_PROBE_TIMEOUT_MS);
+    }
+    return i2c_master_probe(s_bus, addr, I2C_TIMEOUT_MS) == ESP_OK;
+}
 
 static oled_status_t add_device(uint32_t freq_hz)
 {
@@ -94,7 +112,7 @@ oled_status_t oled_init(const oled_cfg_t *cfg)
         return OLED_ERR_BUS;
     }
     s_addr = cfg->addr;
-    if (i2c_master_probe(s_bus, s_addr, I2C_TIMEOUT_MS) != ESP_OK) {
+    if (!probe_with_wakeup(s_addr)) {
         release();
         return OLED_ERR_NOT_FOUND;
     }
