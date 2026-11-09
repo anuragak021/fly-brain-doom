@@ -24,7 +24,9 @@ void app_main(void)
         .oled_sda = PIN_OLED_SDA,
         .oled_scl = PIN_OLED_SCL,
         .oled_addr = (uint8_t)OLED_I2C_ADDR_DEFAULT,
-        .oled_freq_hz = OLED_I2C_FREQ_STD_HZ,
+        /* 100 kHz: on the jumper-wired home setup (2026-11-03) 400 kHz failed 882 of 1200 frame
+         * writes (12.7 fps); 100 kHz failed 6 to 7 per 100 (6.1 to 6.4 fps). */
+        .oled_freq_hz = OLED_I2C_FREQ_SLOW_HZ,
     };
     const dp_status_t st = doom_platform_init(&cfg);
     if (st != DP_OK) {

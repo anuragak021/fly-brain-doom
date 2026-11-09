@@ -71,7 +71,7 @@ once they are recorded from a real run.
 | Signal | ESP32-S3 | Notes |
 |---|---|---|
 | OLED SDA | GPIO8 | internal pull-up enabled in addition to the module's |
-| OLED SCL | GPIO9 | 400 kHz (1 MHz selectable for tests, out of spec) |
+| OLED SCL | GPIO9 | 100 kHz in the current build (400 kHz failed most frame writes on jumper wires, see `main/app_main.c`); 400 kHz and 1 MHz (out of spec) selectable |
 | OLED VCC / GND | 3V3 / GND | |
 | Demo link TX / RX | GPIO43 / GPIO44 (UART0) | to the board's CH343 USB-UART bridge (COM connector) |
 

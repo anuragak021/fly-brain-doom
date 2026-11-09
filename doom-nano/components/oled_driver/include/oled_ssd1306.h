@@ -14,6 +14,7 @@
 #include "driver/gpio.h"
 
 #define OLED_I2C_ADDR_DEFAULT (0x3CU)
+#define OLED_I2C_FREQ_SLOW_HZ (100000U)  /**< Standard mode, for long or loose wiring. */
 #define OLED_I2C_FREQ_STD_HZ (400000U)   /**< SSD1306 datasheet fast mode maximum. */
 #define OLED_I2C_FREQ_FAST_HZ (1000000U) /**< Out of spec overclock, for measurement only. */
 #define OLED_FRAME_BYTES (1024U)         /**< 128 x 64 / 8 */
