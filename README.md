@@ -7,10 +7,10 @@ not a simulation of a fly brain.
 ## Demo
 
 <p align="center">
-  <img src="docs/media/oled_doom.gif" alt="Doom on the 128x64 OLED driven by the ESP32-S3" width="320"><br>
+  <img src="docs/media/oled_doom.gif" alt="Doom on the 128x64 OLED driven by the ESP32-S3" width="560"><br>
   <em>Doom (PrBoom) on the ESP32-S3, drawn on the 128x64 SSD1306 OLED (recorded 2026-11-09,
   brain-driven build of <code>doom-nano/</code>). The clip shows the display only, not the STM32
-  side. Full video: <a href="docs/media/oled_doom.mp4">docs/media/oled_doom.mp4</a>.</em>
+  side; the GIF is the first 20 s. Full video (37 s): <a href="docs/media/oled_doom.mp4">docs/media/oled_doom.mp4</a>.</em>
 </p>
 
 | The brain: Nucleo-H753ZI | The game: ESP32-S3 N16R8 |
